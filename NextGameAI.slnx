@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NextGameAI.Web/NextGameAI.Web.csproj" />
+  </Folder>
+</Solution>
