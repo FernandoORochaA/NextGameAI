@@ -1,0 +1,31 @@
+@model NextGameAI.Web.ViewModels.SimpleLibraryForm
+@using System.Globalization
+<fieldset class="mb-3 rating-control" aria-describedby="rating-help">
+    <legend class="form-label">Avaliação</legend>
+    <div class="rating-stars">
+    @for (var star = 1; star <= 5; star++)
+    {
+        var fill = Math.Clamp((Model.Rating ?? 0) - (star - 1) * 2, 0, 2) * 50;
+        <span class="rating-star" data-star="@star">
+            <span class="star-outline" aria-hidden="true">☆</span>
+            <span class="star-fill" style="width: @(fill)%" aria-hidden="true">★</span>
+            @for (var half = 0; half < 2; half++)
+            {
+                var value = star * 2 - 1 + half;
+                var label = (value / 2m).ToString("0.#", CultureInfo.GetCultureInfo("pt-BR")) + " estrelas";
+                <input class="rating-input visually-hidden" type="radio" name="Rating" id="rating-@value" value="@value" checked="@(Model.Rating == value)" />
+                <label class="star-half @(half == 0 ? "left" : "right")" for="rating-@value" title="@label"><span class="visually-hidden">@label</span></label>
+            }
+        </span>
+    }
+    </div>
+    <div class="rating-actions">
+        <label><input type="radio" name="Rating" value="" checked="@(Model.Rating is null)" /> Não avaliado</label>
+        <label><input type="radio" name="Rating" value="0" checked="@(Model.Rating == 0)" /> Zero estrelas</label>
+    </div>
+    <output id="rating-value" aria-live="polite">@(Model.Rating is int rating
+        ? (rating / 2m).ToString("0.#", CultureInfo.GetCultureInfo("pt-BR")) + " de 5 estrelas"
+        : "Não avaliado")</output>
+    <small id="rating-help" class="d-block">Cada metade da estrela vale meia estrela. Use as setas do teclado para ajustar.</small>
+    <span asp-validation-for="Rating" class="text-danger"></span>
+</fieldset>

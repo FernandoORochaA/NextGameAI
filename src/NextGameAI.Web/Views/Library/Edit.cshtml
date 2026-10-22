@@ -1,0 +1,15 @@
+@model NextGameAI.Web.ViewModels.SimpleLibraryForm
+@{ ViewData["Title"] = "Editar jogo"; }
+<div class="library-form">
+    <h1>Editar jogo</h1>
+    <form asp-action="Edit" asp-route-id="@Context.Request.RouteValues["id"]" method="post">
+        <div asp-validation-summary="All" class="text-danger" role="alert"></div>
+        <partial name="_Form" model="Model" />
+        <button class="btn btn-primary" type="submit">Salvar</button>
+        <a asp-action="Index" class="ms-2">Cancelar</a>
+    </form>
+</div>
+@section Scripts {
+    <script src="~/js/library-form.js" asp-append-version="true"></script>
+    <script src="~/js/platform-removal.js" asp-append-version="true"></script>
+}

@@ -1,0 +1,9 @@
+@model NextGameAI.Web.Models.LibraryEntry
+@{ ViewData["Title"] = "Excluir da biblioteca"; }
+<h1>Excluir da biblioteca</h1>
+<p>Deseja excluir <strong>@Model.Game.Title</strong>@if (Model.Game.EditionTitle is not null) { <span> — @Model.Game.EditionTitle</span> } da sua biblioteca?</p>
+<p>A avaliação, as observações e as posses desta entrada serão removidas. O registro de catálogo será preservado.</p>
+<form asp-action="Delete" asp-route-id="@Model.Id" method="post">
+    <button class="btn btn-danger" type="submit">Confirmar exclusão</button>
+    <a asp-action="Index">Cancelar</a>
+</form>

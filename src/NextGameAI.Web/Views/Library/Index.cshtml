@@ -1,0 +1,30 @@
+@model IReadOnlyList<NextGameAI.Web.Models.LibraryEntry>
+@{ ViewData["Title"] = "Minha biblioteca"; }
+<h1>Minha biblioteca</h1>
+<p><a asp-action="Create" class="btn btn-primary">Cadastrar jogo</a></p>
+@if (Model.Count == 0)
+{
+    <p>Sua biblioteca está vazia. Cadastre seu primeiro jogo.</p>
+}
+else
+{
+    <div class="table-responsive">
+    <table class="table">
+        <thead><tr><th>Jogo</th><th>Status</th><th>Avaliação</th><th>Plataformas</th><th>Ações</th></tr></thead>
+        <tbody>
+        @foreach (var entry in Model)
+        {
+            <tr>
+                <td>@entry.Game.Title @if (entry.Game.EditionTitle is not null) { <span>— @entry.Game.EditionTitle</span> }</td>
+                <td>@Html.DisplayFor(_ => entry.Status)</td>
+                <td><partial name="_Rating" model="entry" /></td>
+                <td><partial name="_Platforms" model="entry.Ownerships" /></td>
+                <td><a asp-action="Details" asp-route-id="@entry.Id">Detalhes</a> |
+                    <a asp-action="Edit" asp-route-id="@entry.Id">Editar</a> |
+                    <a asp-action="Delete" asp-route-id="@entry.Id">Excluir</a></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    </div>
+}

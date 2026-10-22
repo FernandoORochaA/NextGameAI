@@ -1,0 +1,57 @@
+@model NextGameAI.Web.ViewModels.SimpleLibraryForm
+@using NextGameAI.Web.ViewModels
+<div class="mb-3">
+    <label asp-for="Title" class="form-label"></label>
+    <input asp-for="Title" class="form-control" maxlength="300" readonly="@Model.IsEditing" />
+    <span asp-validation-for="Title" class="text-danger"></span>
+</div>
+<div class="mb-3">
+    <label for="library-status" class="form-label">Status</label>
+    <select asp-for="Status" asp-items="Html.GetEnumSelectList<NextGameAI.Web.Models.LibraryStatus>()" class="form-select" id="library-status"></select>
+</div>
+<partial name="_StarRating" model="Model" />
+<div class="mb-3">
+    <label asp-for="Notes" class="form-label"></label>
+    <textarea asp-for="Notes" class="form-control" maxlength="5000" rows="3"></textarea>
+</div>
+<div class="mb-3" id="abandonment-field">
+    <label asp-for="AbandonmentReason" class="form-label"></label>
+    <textarea asp-for="AbandonmentReason" class="form-control" maxlength="1000" rows="2"></textarea>
+    <small>Opcional. Ao sair de Abandonado, este motivo será apagado.</small>
+</div>
+<fieldset class="mb-4" aria-describedby="platform-help">
+    <legend class="form-label">Plataformas</legend>
+    <div class="platform-options">
+    @foreach (var choice in PlatformGroups.Choices)
+    {
+        <label class="platform-choice" for="platform-@choice.Code">
+            <input type="checkbox" name="SelectedPlatforms" value="@choice.Code" id="platform-@choice.Code"
+                   checked="@Model.SelectedPlatforms.Contains(choice.Code)" />
+            @choice.Name
+        </label>
+    }
+    </div>
+    <small id="platform-help">@(Model.IsEditing
+        ? "Marque ou desmarque plataformas. Para remover as já cadastradas, confirme abaixo antes de salvar."
+        : "Selecione uma ou mais plataformas em que você possui o jogo.")</small>
+    <span asp-validation-for="SelectedPlatforms" class="text-danger d-block"></span>
+</fieldset>
+@if (Model.IsEditing)
+{
+    var hasRemovals = Model.ExistingPlatformCounts.Keys.Any(x => !Model.SelectedPlatforms.Contains(x));
+    <fieldset id="platform-removal-confirmations" class="mb-4 border rounded p-3" hidden="@(!hasRemovals)">
+        <legend class="form-label">Confirmar remoção</legend>
+        @foreach (var choice in PlatformGroups.Choices.Where(x => Model.ExistingPlatformCounts.ContainsKey(x.Code)))
+        {
+            var removing = !Model.SelectedPlatforms.Contains(choice.Code);
+            <div data-removal-group="@choice.Code" hidden="@(!removing)">
+                <p>Tem certeza de que deseja remover @choice.Name deste jogo?</p>
+                <label for="remove-@choice.Code">
+                    <input type="checkbox" name="ConfirmedPlatformRemovals" id="remove-@choice.Code" value="@choice.Code"
+                           checked="@Model.ConfirmedPlatformRemovals.Contains(choice.Code)" disabled="@(!removing)" required="@removing" />
+                    Sim, desejo remover esta plataforma.
+                </label>
+            </div>
+        }
+    </fieldset>
+}

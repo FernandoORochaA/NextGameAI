@@ -1,0 +1,9 @@
+@model NextGameAI.Web.Models.LibraryEntry
+@if (Model.Rating is int rating)
+{
+    <span>@((rating / 2m).ToString("0.#", System.Globalization.CultureInfo.GetCultureInfo("pt-BR"))) / 5 estrelas</span>
+}
+else
+{
+    <span>Não avaliado</span>
+}

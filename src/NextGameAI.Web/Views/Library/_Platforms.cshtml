@@ -1,0 +1,7 @@
+@model IEnumerable<NextGameAI.Web.Models.GameOwnership>
+<ul>
+@foreach (var name in NextGameAI.Web.ViewModels.PlatformGroups.DisplayNames(Model))
+{
+    <li>@name</li>
+}
+</ul>

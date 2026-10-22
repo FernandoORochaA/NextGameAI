@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/NextGameAI.Web/NextGameAI.Web.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NextGameAI.Web.Tests/NextGameAI.Web.Tests.csproj" />
+  </Folder>
 </Solution>
