@@ -1,0 +1,11 @@
+@model NextGameAI.Web.ViewModels.CatalogGameResult
+@if (Model.CoverUrl is not null)
+{
+    <img src="@Model.CoverUrl" alt="Capa de @Model.Title" loading="lazy" width="99" height="132" class="mb-2" />
+}
+<p class="text-muted">
+    @if (Model.ReleaseYear.HasValue) { <span>@Model.ReleaseYear · </span> }
+    @if (Model.GameType is not null) { <span>@Model.GameType · </span> }
+    @if (Model.EditionTitle is not null) { <span>@Model.EditionTitle · </span> }
+    <span>IGDB @Model.IgdbId</span>
+</p>

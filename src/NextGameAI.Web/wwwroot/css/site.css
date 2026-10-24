@@ -1,3 +1,11 @@
+.catalog-search { max-width: 850px; margin: 1.5rem auto; }
+.catalog-results { list-style: none; padding: 0; display: grid; gap: 1rem; }
+.catalog-card { display: flex; gap: 1rem; padding: 1rem; border: 1px solid #ddd; border-radius: .5rem; }
+.catalog-card h2 { font-size: 1.2rem; overflow-wrap: anywhere; }
+.catalog-cover { width: 99px; height: 132px; object-fit: cover; flex-shrink: 0; border-radius: .25rem; }
+.catalog-cover-missing { display: grid; place-items: center; background: #f3f3f3; color: #595959; text-align: center; font-size: .85rem; padding: .5rem; }
+@media (max-width: 480px) { .catalog-card { padding: .75rem; gap: .75rem; } .catalog-cover { width: 75px; height: 100px; } }
+
 html {
   font-size: 14px;
 }

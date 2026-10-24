@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using NextGameAI.Web.Data;
 using NextGameAI.Web.Services;
+using NextGameAI.Web.Services.Igdb;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +20,28 @@ builder.Services.AddDbContext<NextGameAiDbContext>(options => options.UseSqlite(
     $"Data Source={Path.Combine(builder.Environment.ContentRootPath, "nextgameai.db")};Foreign Keys=True"));
 builder.Services.AddScoped<CurrentUserProfile>();
 builder.Services.AddScoped<LibraryService>();
+builder.Services.AddIgdbAuthentication(builder.Configuration);
+builder.Services.AddIgdbSearch();
+builder.Services.AddRateLimiter(options =>
+{
+    // One bounded bucket for the single-user local MVP; no unbounded per-IP state.
+    options.AddPolicy("catalog-search", _ => RateLimitPartition.GetFixedWindowLimiter("local-catalog",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.Headers.RetryAfter = "60";
+        await context.HttpContext.Response.WriteAsJsonAsync(new
+        {
+            code = "rateLimited",
+            message = "Muitas pesquisas em pouco tempo. Aguarde um momento e tente novamente."
+        }, ct);
+    };
+});
 
 var app = builder.Build();
 
@@ -38,6 +62,7 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseRouting();
+app.UseRateLimiter();
 
 app.UseAuthorization();
 

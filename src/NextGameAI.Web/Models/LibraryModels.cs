@@ -23,6 +23,10 @@ public class Game
     [Range(1, long.MaxValue)] public long? IgdbId { get; set; }
     [Required, StringLength(300)] public string Title { get; set; } = "";
     [StringLength(200)] public string? EditionTitle { get; set; }
+    [StringLength(128)] public string? CoverImageId { get; set; }
+    public DateOnly? FirstReleaseDate { get; set; }
+    [Range(0, long.MaxValue)] public long? GameTypeId { get; set; }
+    [StringLength(100)] public string? GameType { get; set; }
     public List<LibraryEntry> LibraryEntries { get; set; } = [];
 }
 

@@ -56,7 +56,7 @@ Fora de Development as migrations não são aplicadas automaticamente.
 - `Rating` é inteiro anulável de 0 a 10, em unidades de meia estrela. A interface exibe de 0 a 5; vazio significa não avaliado.
 - Status: 0 Não iniciado, 1 Jogando, 2 Finalizado, 3 Abandonado. O motivo é opcional e é limpo ao sair de Abandonado.
 - O formulário principal cria um registro manual pelo título, sem seletor técnico de catálogo ou edição manual. Títulos iguais nunca são mesclados automaticamente.
-- A operação interna `SaveAsync(LibraryForm)` mantém a reutilização por ID explícito e a rejeição de uma segunda entrada do mesmo jogo/perfil para futuros fluxos de catálogo.
+- A operação interna `SaveAsync(LibraryForm)` mantém a reutilização por ID explícito e a rejeição de uma segunda entrada do mesmo jogo/perfil; o cadastro IGDB atual reutiliza as regras de persistência.
 - Na edição são alterados dados pessoais e posses; título/edição compartilhados e o vínculo com o catálogo são preservados.
 - `EditionTitle` e os identificadores IGDB existentes são preservados no catálogo. A edição manual saiu do formulário; não existe hierarquia de versões ou integração IGDB nesta etapa.
 - Excluir uma entrada remove suas posses, mas preserva catálogo e referências, inclusive para outro perfil ou reutilização futura.
@@ -82,11 +82,24 @@ sem gravar jogos no banco pessoal. Eles não executam JavaScript nem substituem 
 
 A suíte inclui os testes originais e os novos cenários de formulário simplificado, preservação de dados legados,
 grupos de plataformas e rollback das referências neutras. Os bancos de teste são isolados do banco pessoal.
-Na última validação, os 110 testes foram aprovados.
+Na validação da biblioteca simplificada, os 110 testes foram aprovados. As etapas posteriores ampliaram a suíte;
+consulte a documentação da integração IGDB para os cenários de cadastro externo.
+
+## Cadastro pela IGDB
+
+O menu “Pesquisar jogos na IGDB” abre a busca; cada resultado oferece “Adicionar à biblioteca”.
+O formulário reutiliza status, estrelas, observações e plataformas, identificando o jogo pelo IgdbId.
+O cadastro manual permanece independente da integração e jogos antigos não são associados por nome.
+Título, edição, capa, lançamento e tipo do catálogo são preservados quando disponíveis.
+Duplicatas do mesmo IgdbId na biblioteca oferecem links para detalhes e edição.
+
+Consulte [cadastro-igdb.md](cadastro-igdb.md) para o fluxo, regras de identidade e testes.
+Antes do primeiro F5, faça backup: a aplicação aplica migrations automaticamente em Development.
+A migration aditiva de metadados foi testada em SQLite isolado, sem atualizar o banco pessoal.
 
 ## Roteiro manual pelo navegador
 
-1. Abra a biblioteca e clique em cadastrar jogo.
+1. Abra a biblioteca, clique em “Adicionar jogo” e, na pesquisa, escolha “Cadastrar manualmente”.
 2. Informe título, Jogando, observações e marque PC e PlayStation.
 3. Clique na primeira metade da quarta estrela; confirme 3,5 de 5 estrelas. Salve e confira os detalhes.
 4. Edite; as plataformas existentes devem estar marcadas e editáveis. Marque Xbox e salve.

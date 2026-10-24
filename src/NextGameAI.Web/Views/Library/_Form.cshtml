@@ -1,10 +1,22 @@
 @model NextGameAI.Web.ViewModels.SimpleLibraryForm
 @using NextGameAI.Web.ViewModels
+@if ((Model.IsIgdbSelection || Model.IgdbId.HasValue) && !Model.IsEditing)
+{
+    <input type="hidden" asp-for="IgdbId" />
+    <p>Jogo selecionado na IGDB: @(Model.SelectedGame?.Title ?? "Seleção indisponível") · IGDB @Model.IgdbId</p>
+    @if (Model.SelectedGame is not null)
+    {
+        <partial name="_CatalogMetadata" model="Model.SelectedGame" />
+    }
+}
+else
+{
 <div class="mb-3">
     <label asp-for="Title" class="form-label"></label>
     <input asp-for="Title" class="form-control" maxlength="300" readonly="@Model.IsEditing" />
     <span asp-validation-for="Title" class="text-danger"></span>
 </div>
+}
 <div class="mb-3">
     <label for="library-status" class="form-label">Status</label>
     <select asp-for="Status" asp-items="Html.GetEnumSelectList<NextGameAI.Web.Models.LibraryStatus>()" class="form-select" id="library-status"></select>

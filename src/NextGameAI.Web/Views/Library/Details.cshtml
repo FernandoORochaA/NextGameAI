@@ -1,7 +1,9 @@
 @model NextGameAI.Web.Models.LibraryEntry
 @{ ViewData["Title"] = "Detalhes do jogo"; }
 <h1>@Model.Game.Title</h1>
-@if (Model.Game.EditionTitle is not null) { <p>Edição: @Model.Game.EditionTitle</p> }
+@if (Model.Game.IgdbId.HasValue)
+{ <partial name="_CatalogMetadata" model="NextGameAI.Web.ViewModels.CatalogGameResult.FromGame(Model.Game)" /> }
+else if (Model.Game.EditionTitle is not null) { <p>Edição: @Model.Game.EditionTitle</p> }
 <dl>
     <dt>Status</dt><dd>@Html.DisplayFor(x => x.Status)</dd>
     <dt>Avaliação</dt><dd><partial name="_Rating" model="Model" /></dd>

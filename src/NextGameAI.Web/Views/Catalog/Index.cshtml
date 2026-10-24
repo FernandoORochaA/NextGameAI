@@ -1,0 +1,23 @@
+@{
+    ViewData["Title"] = "Pesquisar jogos";
+}
+<section class="catalog-search" data-search-url="@Url.Action("Search", "Catalog")">
+    <h1>Pesquisar jogos</h1>
+    <p class="text-muted">Encontre um jogo na IGDB e adicione-o à sua biblioteca.</p>
+    <form id="catalog-form" role="search">
+        <label for="catalog-term" class="form-label">Nome do jogo</label>
+        <div class="d-flex gap-2">
+            <input id="catalog-term" class="form-control" type="search" name="term" maxlength="100"
+                   autocomplete="off" aria-describedby="catalog-help" />
+            <button type="submit" class="btn btn-outline-dark">Pesquisar</button>
+        </div>
+        <p id="catalog-help" class="form-text">Digite pelo menos 3 caracteres. A pesquisa acontece enquanto você digita.</p>
+    </form>
+    <p>Não encontrou o jogo? <a asp-controller="Library" asp-action="Create">Cadastrar manualmente</a></p>
+    <p id="catalog-status" role="status" aria-live="polite" aria-atomic="true">Digite o nome de um jogo para começar.</p>
+    <ul id="catalog-results" class="catalog-results" aria-label="Jogos encontrados" aria-busy="false"></ul>
+    <noscript><p>Ative o JavaScript no navegador para pesquisar jogos.</p></noscript>
+</section>
+@section Scripts {
+    <script src="~/js/catalog-search.js" asp-append-version="true" defer></script>
+}

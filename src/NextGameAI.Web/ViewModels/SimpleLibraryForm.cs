@@ -11,6 +11,12 @@ public class SimpleLibraryForm : IValidatableObject
     [Display(Name = "Título do jogo")]
     public string Title { get; set; } = "";
 
+    [Range(1, long.MaxValue, ErrorMessage = "Selecione um identificador IGDB válido.")]
+    public long? IgdbId { get; set; }
+    [BindNever] public CatalogGameResult? SelectedGame { get; set; }
+    [BindNever] public bool IsIgdbSelection { get; set; }
+    [BindNever] public int? DuplicateEntryId { get; set; }
+
     [EnumDataType(typeof(LibraryStatus), ErrorMessage = "Selecione um status válido.")]
     public LibraryStatus Status { get; set; }
 

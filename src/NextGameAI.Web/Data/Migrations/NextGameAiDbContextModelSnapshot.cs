@@ -23,9 +23,23 @@ namespace NextGameAI.Web.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("CoverImageId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("EditionTitle")
                         .HasMaxLength(200)
                         .HasColumnType("TEXT");
+
+                    b.Property<DateOnly?>("FirstReleaseDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("GameType")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("GameTypeId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<long?>("IgdbId")
                         .HasColumnType("INTEGER");

@@ -3,11 +3,52 @@ using Microsoft.EntityFrameworkCore;
 using NextGameAI.Web.Data;
 using NextGameAI.Web.Models;
 using NextGameAI.Web.ViewModels;
+using NextGameAI.Web.Services.Igdb;
+using Microsoft.Data.Sqlite;
 
 namespace NextGameAI.Web.Services;
 
-public class LibraryService(NextGameAiDbContext db, CurrentUserProfile currentProfile)
+public class LibraryService(NextGameAiDbContext db, CurrentUserProfile currentProfile, IIgdbClient? igdb = null)
 {
+    public async Task<Game> ResolveIgdbAsync(long id, CancellationToken ct = default)
+    {
+        if (id <= 0) throw new ValidationException("Selecione um identificador IGDB válido.");
+        var local = await db.Games.AsNoTracking().SingleOrDefaultAsync(g => g.IgdbId == id, ct);
+        if (local is not null) return local;
+        var result = await (igdb ?? throw new InvalidOperationException()).GetByIdAsync(id, ct);
+        if (result is null || result.IgdbId != id)
+            throw new ValidationException("O jogo selecionado não foi encontrado na IGDB. Volte à pesquisa e selecione outro título.");
+        var game = new Game
+        {
+            IgdbId = result.IgdbId, Title = result.Title, EditionTitle = result.EditionTitle,
+            CoverImageId = result.CoverImageId, FirstReleaseDate = result.FirstReleaseDate,
+            GameTypeId = result.GameTypeId, GameType = result.GameType
+        };
+        Validator.ValidateObject(game, new ValidationContext(game), true);
+        return game;
+    }
+
+    public async Task<int> SaveIgdbAsync(SimpleLibraryForm input, CancellationToken ct = default)
+    {
+        if (input.IgdbId is null) throw new ValidationException("Selecione um identificador IGDB válido.");
+        // Resolve identity before starting a SQLite transaction; browser metadata is never authoritative.
+        var game = await ResolveIgdbAsync(input.IgdbId.Value, ct);
+        var trusted = new SimpleLibraryForm
+        {
+            Title = game.Title, IgdbId = game.IgdbId, Status = input.Status, Rating = input.Rating,
+            Notes = input.Notes, AbandonmentReason = input.AbandonmentReason,
+            SelectedPlatforms = input.SelectedPlatforms, ConfirmedPlatformRemovals = input.ConfirmedPlatformRemovals
+        };
+        try { return await SaveSimpleCoreAsync(trusted, null, game); }
+        catch (DbUpdateException ex) when (ex.InnerException is SqliteException { SqliteExtendedErrorCode: 2067 or 1555 })
+        {
+            // Another request may have inserted this identity. Recheck after rollback, retry only once.
+            var local = await db.Games.AsNoTracking().SingleOrDefaultAsync(g => g.IgdbId == game.IgdbId, ct);
+            if (local is null) throw;
+            return await SaveSimpleCoreAsync(trusted, null, local);
+        }
+    }
+
     public async Task<IQueryable<LibraryEntry>> QueryAsync()
     {
         var profileId = await currentProfile.GetIdAsync();
@@ -21,9 +62,33 @@ public class LibraryService(NextGameAiDbContext db, CurrentUserProfile currentPr
 
     public Task<int> SaveSimpleAsync(SimpleLibraryForm input, int? entryId = null)
     {
+        if (input.IgdbId.HasValue && !entryId.HasValue)
+            throw new ValidationException("Utilize o cadastro IGDB para o jogo selecionado.");
+        return SaveSimpleCoreAsync(input, entryId, null);
+    }
+
+    private Task<int> SaveSimpleCoreAsync(SimpleLibraryForm input, int? entryId, Game? selectedGame)
+    {
         Validator.ValidateObject(input, new ValidationContext(input), true);
         return InTransactionAsync(async () =>
         {
+            Game? catalog = null;
+            if (selectedGame is not null)
+            {
+                catalog = await db.Games.SingleOrDefaultAsync(g => g.IgdbId == selectedGame.IgdbId);
+                if (catalog is not null)
+                {
+                    var profileId = await currentProfile.GetIdAsync();
+                    var duplicate = await db.LibraryEntries.SingleOrDefaultAsync(e => e.GameId == catalog.Id && e.UserProfileId == profileId);
+                    if (duplicate is not null) throw new LibraryDuplicateException(duplicate.Id);
+                }
+                else
+                {
+                    catalog = selectedGame;
+                    db.Games.Add(catalog);
+                    await db.SaveChangesAsync();
+                }
+            }
             LibraryEntry? existing = null;
             if (entryId.HasValue)
                 existing = await (await QueryAsync()).SingleOrDefaultAsync(x => x.Id == entryId)
@@ -61,7 +126,7 @@ public class LibraryService(NextGameAiDbContext db, CurrentUserProfile currentPr
 
             return await SaveCoreAsync(new LibraryForm
             {
-                ExistingGameId = existing?.GameId,
+                ExistingGameId = existing?.GameId ?? catalog?.Id,
                 Title = existing?.Game.Title ?? input.Title,
                 EditionTitle = existing?.Game.EditionTitle,
                 Status = input.Status, Rating = input.Rating, Notes = input.Notes,
