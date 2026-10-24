@@ -12,9 +12,70 @@ public class NextGameAiDbContext(DbContextOptions<NextGameAiDbContext> options) 
     public DbSet<Store> Stores => Set<Store>();
     public DbSet<Platform> Platforms => Set<Platform>();
     public DbSet<GameOwnership> GameOwnerships => Set<GameOwnership>();
+    public DbSet<CatalogTaxonomy> CatalogTaxonomies => Set<CatalogTaxonomy>();
+    public DbSet<GameTaxonomy> GameTaxonomies => Set<GameTaxonomy>();
+    public DbSet<GameTimeToBeat> GameTimeToBeats => Set<GameTimeToBeat>();
+    public DbSet<CatalogPlatform> CatalogPlatforms => Set<CatalogPlatform>();
+    public DbSet<GameMultiplayerMode> GameMultiplayerModes => Set<GameMultiplayerMode>();
+    public DbSet<GameEnrichmentState> GameEnrichmentStates => Set<GameEnrichmentState>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
+        var taxonomy = model.Entity<CatalogTaxonomy>();
+        taxonomy.HasIndex(x => new { x.Kind, x.IgdbId }).IsUnique();
+        taxonomy.ToTable(t =>
+        {
+            t.HasCheckConstraint("CK_CatalogTaxonomy_Kind", "Kind IN (0,1,2,3,4)");
+            t.HasCheckConstraint("CK_CatalogTaxonomy_IgdbId", "IgdbId > 0");
+            t.HasCheckConstraint("CK_CatalogTaxonomy_Name", "length(trim(Name)) > 0");
+        });
+        var link = model.Entity<GameTaxonomy>();
+        link.HasKey(x => new { x.GameId, x.CatalogTaxonomyId });
+        link.HasOne(x => x.Game).WithMany().HasForeignKey(x => x.GameId).OnDelete(DeleteBehavior.Restrict);
+        link.HasOne(x => x.CatalogTaxonomy).WithMany().HasForeignKey(x => x.CatalogTaxonomyId).OnDelete(DeleteBehavior.Restrict);
+
+        var time = model.Entity<GameTimeToBeat>();
+        time.HasKey(x => x.GameId);
+        time.HasOne(x => x.Game).WithOne().HasForeignKey<GameTimeToBeat>(x => x.GameId).OnDelete(DeleteBehavior.Restrict);
+        time.HasIndex(x => x.IgdbId).IsUnique().HasFilter("IgdbId IS NOT NULL");
+        time.ToTable(t =>
+        {
+            t.HasCheckConstraint("CK_GameTimeToBeat_Values", "(HastilySeconds IS NULL OR HastilySeconds >= 0) AND (NormallySeconds IS NULL OR NormallySeconds >= 0) AND (CompletelySeconds IS NULL OR CompletelySeconds >= 0) AND (SubmissionCount IS NULL OR SubmissionCount >= 0)");
+            t.HasCheckConstraint("CK_GameTimeToBeat_IgdbId", "IgdbId IS NULL OR IgdbId > 0");
+            t.HasCheckConstraint("CK_GameTimeToBeat_Source", "length(trim(Source)) > 0");
+        });
+
+        var catalogPlatform = model.Entity<CatalogPlatform>();
+        catalogPlatform.HasIndex(x => x.IgdbId).IsUnique();
+        catalogPlatform.ToTable(t =>
+        {
+            t.HasCheckConstraint("CK_CatalogPlatform_IgdbId", "IgdbId > 0");
+            t.HasCheckConstraint("CK_CatalogPlatform_Name", "length(trim(Name)) > 0");
+        });
+        var multiplayer = model.Entity<GameMultiplayerMode>();
+        multiplayer.HasIndex(x => x.IgdbId).IsUnique().HasFilter("IgdbId IS NOT NULL");
+        multiplayer.HasIndex(x => new { x.GameId, x.CatalogPlatformId }).IsUnique();
+        multiplayer.HasIndex(x => x.GameId).IsUnique().HasFilter("CatalogPlatformId IS NULL");
+        multiplayer.HasOne(x => x.Game).WithMany().HasForeignKey(x => x.GameId).OnDelete(DeleteBehavior.Restrict);
+        multiplayer.HasOne(x => x.CatalogPlatform).WithMany().HasForeignKey(x => x.CatalogPlatformId).OnDelete(DeleteBehavior.Restrict);
+        multiplayer.ToTable(t =>
+        {
+            t.HasCheckConstraint("CK_GameMultiplayerMode_IgdbId", "IgdbId IS NULL OR IgdbId > 0");
+            t.HasCheckConstraint("CK_GameMultiplayerMode_Players", "(OfflineCoopMax IS NULL OR OfflineCoopMax >= 0) AND (OfflineMax IS NULL OR OfflineMax >= 0) AND (OnlineCoopMax IS NULL OR OnlineCoopMax >= 0) AND (OnlineMax IS NULL OR OnlineMax >= 0)");
+            t.HasCheckConstraint("CK_GameMultiplayerMode_Source", "length(trim(Source)) > 0");
+        });
+
+        var state = model.Entity<GameEnrichmentState>();
+        state.HasKey(x => new { x.GameId, x.Section });
+        state.HasOne(x => x.Game).WithMany().HasForeignKey(x => x.GameId).OnDelete(DeleteBehavior.Restrict);
+        state.ToTable(t =>
+        {
+            t.HasCheckConstraint("CK_GameEnrichmentState_Section", "Section IN (0,1,2,3,4,5,6)");
+            t.HasCheckConstraint("CK_GameEnrichmentState_Result", "LastResult IN (0,1,2)");
+            t.HasCheckConstraint("CK_GameEnrichmentState_Timestamps", "(LastSuccessAtUtc IS NULL OR LastSuccessAtUtc <= LastAttemptAtUtc) AND (LastResult <> 0 OR LastSuccessAtUtc = LastAttemptAtUtc AND LastSuccessAtUtc IS NOT NULL)");
+            t.HasCheckConstraint("CK_GameEnrichmentState_Source", "length(trim(Source)) > 0");
+        });
+
         model.Entity<Game>().HasIndex(x => x.IgdbId).IsUnique().HasFilter("IgdbId IS NOT NULL");
         model.Entity<Platform>().HasIndex(x => x.IgdbId).IsUnique().HasFilter("IgdbId IS NOT NULL");
         model.Entity<Store>().HasIndex(x => x.Code).IsUnique();

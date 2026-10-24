@@ -17,6 +17,65 @@ namespace NextGameAI.Web.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.13");
 
+            modelBuilder.Entity("NextGameAI.Web.Models.CatalogPlatform", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("IgdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IgdbId")
+                        .IsUnique();
+
+                    b.ToTable("CatalogPlatforms", t =>
+                        {
+                            t.HasCheckConstraint("CK_CatalogPlatform_IgdbId", "IgdbId > 0");
+
+                            t.HasCheckConstraint("CK_CatalogPlatform_Name", "length(trim(Name)) > 0");
+                        });
+                });
+
+            modelBuilder.Entity("NextGameAI.Web.Models.CatalogTaxonomy", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("IgdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Kind", "IgdbId")
+                        .IsUnique();
+
+                    b.ToTable("CatalogTaxonomies", t =>
+                        {
+                            t.HasCheckConstraint("CK_CatalogTaxonomy_IgdbId", "IgdbId > 0");
+
+                            t.HasCheckConstraint("CK_CatalogTaxonomy_Kind", "Kind IN (0,1,2,3,4)");
+
+                            t.HasCheckConstraint("CK_CatalogTaxonomy_Name", "length(trim(Name)) > 0");
+                        });
+                });
+
             modelBuilder.Entity("NextGameAI.Web.Models.Game", b =>
                 {
                     b.Property<int>("Id")
@@ -58,6 +117,120 @@ namespace NextGameAI.Web.Data.Migrations
                     b.ToTable("Games");
                 });
 
+            modelBuilder.Entity("NextGameAI.Web.Models.GameEnrichmentState", b =>
+                {
+                    b.Property<int>("GameId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Section")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("LastAttemptAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("LastResult")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("LastSuccessAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("GameId", "Section");
+
+                    b.ToTable("GameEnrichmentStates", t =>
+                        {
+                            t.HasCheckConstraint("CK_GameEnrichmentState_Result", "LastResult IN (0,1,2)");
+
+                            t.HasCheckConstraint("CK_GameEnrichmentState_Section", "Section IN (0,1,2,3,4,5,6)");
+
+                            t.HasCheckConstraint("CK_GameEnrichmentState_Source", "length(trim(Source)) > 0");
+
+                            t.HasCheckConstraint("CK_GameEnrichmentState_Timestamps", "(LastSuccessAtUtc IS NULL OR LastSuccessAtUtc <= LastAttemptAtUtc) AND (LastResult <> 0 OR LastSuccessAtUtc = LastAttemptAtUtc AND LastSuccessAtUtc IS NOT NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("NextGameAI.Web.Models.GameMultiplayerMode", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool?>("CampaignCoop")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("CatalogPlatformId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool?>("DropIn")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("GameId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("IgdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool?>("LanCoop")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool?>("OfflineCoop")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("OfflineCoopMax")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("OfflineMax")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool?>("OnlineCoop")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("OnlineCoopMax")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("OnlineMax")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool?>("SplitScreen")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool?>("SplitScreenOnline")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CatalogPlatformId");
+
+                    b.HasIndex("GameId")
+                        .IsUnique()
+                        .HasFilter("CatalogPlatformId IS NULL");
+
+                    b.HasIndex("IgdbId")
+                        .IsUnique()
+                        .HasFilter("IgdbId IS NOT NULL");
+
+                    b.HasIndex("GameId", "CatalogPlatformId")
+                        .IsUnique();
+
+                    b.ToTable("GameMultiplayerModes", t =>
+                        {
+                            t.HasCheckConstraint("CK_GameMultiplayerMode_IgdbId", "IgdbId IS NULL OR IgdbId > 0");
+
+                            t.HasCheckConstraint("CK_GameMultiplayerMode_Players", "(OfflineCoopMax IS NULL OR OfflineCoopMax >= 0) AND (OfflineMax IS NULL OR OfflineMax >= 0) AND (OnlineCoopMax IS NULL OR OnlineCoopMax >= 0) AND (OnlineMax IS NULL OR OnlineMax >= 0)");
+
+                            t.HasCheckConstraint("CK_GameMultiplayerMode_Source", "length(trim(Source)) > 0");
+                        });
+                });
+
             modelBuilder.Entity("NextGameAI.Web.Models.GameOwnership", b =>
                 {
                     b.Property<int>("Id")
@@ -83,6 +256,62 @@ namespace NextGameAI.Web.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("GameOwnerships");
+                });
+
+            modelBuilder.Entity("NextGameAI.Web.Models.GameTaxonomy", b =>
+                {
+                    b.Property<int>("GameId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("CatalogTaxonomyId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("GameId", "CatalogTaxonomyId");
+
+                    b.HasIndex("CatalogTaxonomyId");
+
+                    b.ToTable("GameTaxonomies");
+                });
+
+            modelBuilder.Entity("NextGameAI.Web.Models.GameTimeToBeat", b =>
+                {
+                    b.Property<int>("GameId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("CompletelySeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("HastilySeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("IgdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("NormallySeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("SubmissionCount")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("GameId");
+
+                    b.HasIndex("IgdbId")
+                        .IsUnique()
+                        .HasFilter("IgdbId IS NOT NULL");
+
+                    b.ToTable("GameTimeToBeats", t =>
+                        {
+                            t.HasCheckConstraint("CK_GameTimeToBeat_IgdbId", "IgdbId IS NULL OR IgdbId > 0");
+
+                            t.HasCheckConstraint("CK_GameTimeToBeat_Source", "length(trim(Source)) > 0");
+
+                            t.HasCheckConstraint("CK_GameTimeToBeat_Values", "(HastilySeconds IS NULL OR HastilySeconds >= 0) AND (NormallySeconds IS NULL OR NormallySeconds >= 0) AND (CompletelySeconds IS NULL OR CompletelySeconds >= 0) AND (SubmissionCount IS NULL OR SubmissionCount >= 0)");
+                        });
                 });
 
             modelBuilder.Entity("NextGameAI.Web.Models.LibraryEntry", b =>
@@ -296,6 +525,35 @@ namespace NextGameAI.Web.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("NextGameAI.Web.Models.GameEnrichmentState", b =>
+                {
+                    b.HasOne("NextGameAI.Web.Models.Game", "Game")
+                        .WithMany()
+                        .HasForeignKey("GameId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Game");
+                });
+
+            modelBuilder.Entity("NextGameAI.Web.Models.GameMultiplayerMode", b =>
+                {
+                    b.HasOne("NextGameAI.Web.Models.CatalogPlatform", "CatalogPlatform")
+                        .WithMany()
+                        .HasForeignKey("CatalogPlatformId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("NextGameAI.Web.Models.Game", "Game")
+                        .WithMany()
+                        .HasForeignKey("GameId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("CatalogPlatform");
+
+                    b.Navigation("Game");
+                });
+
             modelBuilder.Entity("NextGameAI.Web.Models.GameOwnership", b =>
                 {
                     b.HasOne("NextGameAI.Web.Models.LibraryEntry", "LibraryEntry")
@@ -321,6 +579,36 @@ namespace NextGameAI.Web.Data.Migrations
                     b.Navigation("Platform");
 
                     b.Navigation("Store");
+                });
+
+            modelBuilder.Entity("NextGameAI.Web.Models.GameTaxonomy", b =>
+                {
+                    b.HasOne("NextGameAI.Web.Models.CatalogTaxonomy", "CatalogTaxonomy")
+                        .WithMany()
+                        .HasForeignKey("CatalogTaxonomyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NextGameAI.Web.Models.Game", "Game")
+                        .WithMany()
+                        .HasForeignKey("GameId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("CatalogTaxonomy");
+
+                    b.Navigation("Game");
+                });
+
+            modelBuilder.Entity("NextGameAI.Web.Models.GameTimeToBeat", b =>
+                {
+                    b.HasOne("NextGameAI.Web.Models.Game", "Game")
+                        .WithOne()
+                        .HasForeignKey("NextGameAI.Web.Models.GameTimeToBeat", "GameId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Game");
                 });
 
             modelBuilder.Entity("NextGameAI.Web.Models.LibraryEntry", b =>
