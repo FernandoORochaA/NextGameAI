@@ -10,7 +10,7 @@ public sealed partial class GameEnrichmentService
     private static Work PrepareTime(IgdbMetadataSection<IgdbTimeToBeatResult> source, long externalId)
     {
         var result = DetailResult(CatalogMetadataSection.TimeToBeat, source.Status, source.Failure,
-            source.Status == IgdbMetadataStatus.Empty && source.Value is null);
+            source.Status == IgdbMetadataStatus.Empty && source.Value is null) with { StatusCode = source.StatusCode, RetryAfter = source.RetryAfter };
         var row = source.Value;
         if (source.Status == IgdbMetadataStatus.Success && source.Failure is null && row is not null &&
             row.GameIgdbId == externalId && row.IgdbId > 0 && row.HastilySeconds is not < 0 &&
@@ -29,7 +29,7 @@ public sealed partial class GameEnrichmentService
     private static Work PrepareMultiplayer(IgdbMetadataSection<IReadOnlyList<IgdbMultiplayerResult>> source, long externalId)
     {
         var result = DetailResult(CatalogMetadataSection.Multiplayer, source.Status, source.Failure,
-            source.Status == IgdbMetadataStatus.Empty && source.Value is { Count: 0 });
+            source.Status == IgdbMetadataStatus.Empty && source.Value is { Count: 0 }) with { StatusCode = source.StatusCode, RetryAfter = source.RetryAfter };
         if (source.Status == IgdbMetadataStatus.Success && source.Failure is null && source.Value is { Count: > 0 and < 100 })
         {
             var rows = source.Value.ToArray();

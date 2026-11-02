@@ -18,7 +18,8 @@ public enum TaxonomyEnrichmentOutcome { Applied, EmptyPreserved, InvalidResponse
 
 // No payloads or keyword names in operation results or exception messages.
 public sealed record TaxonomyEnrichmentResult(CatalogMetadataSection Section, TaxonomyEnrichmentOutcome Outcome,
-    IgdbMetadataStatus ExternalStatus, IgdbQueryFailure? Failure);
+    IgdbMetadataStatus ExternalStatus, IgdbQueryFailure? Failure,
+    System.Net.HttpStatusCode? StatusCode = null, TimeSpan? RetryAfter = null);
 
 public sealed record GameEnrichmentResult(GameEnrichmentOutcome Outcome,
     IReadOnlyList<TaxonomyEnrichmentResult> Sections);

@@ -77,6 +77,26 @@ public sealed class GameEnrichmentServiceTests
     private static IgdbMetadataSection<IReadOnlyList<IgdbTaxonomyResult>> Section(IgdbTaxonomyKind kind, params long[] ids) =>
         new(IgdbMetadataStatus.Success, Array.AsReadOnly(ids.Select(id => new IgdbTaxonomyResult(kind, id, "Synthetic reference " + id)).ToArray()));
     private static IgdbMetadataSection<IReadOnlyList<IgdbTaxonomyResult>> Error(IgdbMetadataStatus status) => new(status);
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task HttpDiagnosticsSurviveReturnedOrThrownFailureWithoutChangingCatalog(bool throws)
+    {
+        using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichTaxonomiesAsync(id);
+        var before = await f.Snapshot("Games", "GameTaxonomies", "CatalogTaxonomies", "LibraryEntries", "GameOwnerships");
+        f.Clock.Now = f.Clock.Now.AddDays(1);
+        f.Metadata.Response = external => throws
+            ? throw new IgdbQueryException(IgdbQueryFailure.RateLimited, System.Net.HttpStatusCode.TooManyRequests, TimeSpan.FromHours(2))
+            : Good(external) with { Genres = new(IgdbMetadataStatus.TransportFailure, Failure: IgdbQueryFailure.RateLimited,
+                StatusCode: System.Net.HttpStatusCode.TooManyRequests, RetryAfter: TimeSpan.FromHours(2)) };
+        var result = await f.Service.EnrichTaxonomiesAsync(id);
+        var genre = Assert.Single(result.Sections, s => s.Section == CatalogMetadataSection.Genres);
+        Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, genre.StatusCode); Assert.Equal(TimeSpan.FromHours(2), genre.RetryAfter);
+        Assert.Equal(before, await f.Snapshot("Games", "GameTaxonomies", "CatalogTaxonomies", "LibraryEntries", "GameOwnerships"));
+        using var db = f.Db(); var state = await db.GameEnrichmentStates.SingleAsync(s => s.Section == CatalogMetadataSection.Genres);
+        Assert.Equal(f.Clock.Now.UtcDateTime.AddDays(-1), state.LastSuccessAtUtc);
+        Assert.Equal(CatalogUpdateResult.TemporaryFailure, state.LastResult);
+    }
+
     private static IgdbMetadataResult Good(long id) => new(id,
         Section(IgdbTaxonomyKind.Genre, 10), Section(IgdbTaxonomyKind.Theme, 10), Section(IgdbTaxonomyKind.GameMode, 10),
         Section(IgdbTaxonomyKind.PlayerPerspective, 10), Section(IgdbTaxonomyKind.Keyword, 10),

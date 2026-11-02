@@ -72,6 +72,24 @@ public sealed class GameEnrichmentDetailsTests
         true, false, null, false, true, null, true, 0, null, 4, null);
     private static IgdbMetadataSection<IReadOnlyList<IgdbMultiplayerResult>> Multi(params IgdbMultiplayerResult[] rows) =>
         new(IgdbMetadataStatus.Success, Array.AsReadOnly(rows));
+    [Fact]
+    public async Task DetailHttpDiagnosticsArePreservedWithoutReplacingPreviousMetadata()
+    {
+        using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichDurationAndMultiplayerAsync(id);
+        var before = await f.Snapshot("GameTimeToBeats", "GameMultiplayerModes", "CatalogPlatforms");
+        f.Metadata.Response = external => Good(external) with
+        {
+            TimeToBeat = new(IgdbMetadataStatus.TransportFailure, Failure: IgdbQueryFailure.RateLimited,
+                StatusCode: System.Net.HttpStatusCode.TooManyRequests, RetryAfter: TimeSpan.FromHours(2)),
+            Multiplayer = new(IgdbMetadataStatus.TransportFailure, Failure: IgdbQueryFailure.HttpError,
+                StatusCode: System.Net.HttpStatusCode.ServiceUnavailable)
+        };
+        var result = await f.Service.EnrichDurationAndMultiplayerAsync(id);
+        Assert.Equal(TimeSpan.FromHours(2), result.Sections.Single(s => s.Section == CatalogMetadataSection.TimeToBeat).RetryAfter);
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, result.Sections.Single(s => s.Section == CatalogMetadataSection.Multiplayer).StatusCode);
+        Assert.Equal(before, await f.Snapshot("GameTimeToBeats", "GameMultiplayerModes", "CatalogPlatforms"));
+    }
+
     private static IgdbMetadataResult Good(long game)
     {
         IgdbMetadataSection<IReadOnlyList<IgdbTaxonomyResult>> Tax(IgdbTaxonomyKind kind) =>

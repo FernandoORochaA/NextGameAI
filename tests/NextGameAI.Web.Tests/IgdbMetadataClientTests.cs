@@ -321,6 +321,28 @@ public sealed class IgdbMetadataClientTests
         Assert.Single(f.Requests);
     }
 
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task RelativeAndAbsoluteRetryAfterReachCooldownWithoutEarlyRetry(bool absolute)
+    {
+        using var f = new Fixture(); var start = f.Clock.GetUtcNow();
+        f.Override = (_, _) =>
+        {
+            var response = Json("synthetic", HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = absolute ? new RetryConditionHeaderValue(start.AddHours(2)) : new RetryConditionHeaderValue(TimeSpan.FromHours(2));
+            return Task.FromResult(response);
+        };
+        var external = await f.Client.GetSectionsAsync(974, new[] { IgdbMetadataSectionKind.Genres });
+        Assert.Single(f.Requests); Assert.Equal(TimeSpan.FromHours(2), external.Genres.RetryAfter);
+        var policy = new NextGameAI.Web.Services.GameEnrichmentCooldown(f.Clock, new(f.Clock));
+        policy.RecordResult(1, start.UtcDateTime, new(NextGameAI.Web.Models.CatalogMetadataSection.Genres,
+            NextGameAI.Web.Services.TaxonomyEnrichmentOutcome.ExternalFailure, external.Genres.Status,
+            external.Genres.Failure, external.Genres.StatusCode, external.Genres.RetryAfter));
+        var decision = policy.Evaluate(1, NextGameAI.Web.Models.CatalogMetadataSection.Genres, null);
+        Assert.Equal(start.AddHours(2).UtcDateTime, decision.NextAllowedAtUtc);
+        Assert.Single(f.Requests);
+    }
+
     [Fact]
     public async Task FailureOfTimeEndpointStillAllowsMultiplayerQuery()
     {

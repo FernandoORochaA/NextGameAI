@@ -136,7 +136,7 @@ public sealed partial class GameEnrichmentService(IServiceScopeFactory scopes, I
         }
         if (source.Value is not null && source.Status is IgdbMetadataStatus.GameNotFound or IgdbMetadataStatus.TransportFailure)
             outcome = TaxonomyEnrichmentOutcome.InvalidResponse;
-        return new(kind, rows, new(section, outcome, source.Status, source.Failure));
+        return new(kind, rows, new(section, outcome, source.Status, source.Failure, source.StatusCode, source.RetryAfter));
     }
 
     private static async Task Synchronize(NextGameAiDbContext db, int gameId, Plan plan, CancellationToken ct)
@@ -167,8 +167,9 @@ public sealed partial class GameEnrichmentService(IServiceScopeFactory scopes, I
     private static IgdbMetadataResult Failed(long id, IgdbQueryException error)
     {
         var status = error.Failure == IgdbQueryFailure.InvalidResponse ? IgdbMetadataStatus.InvalidResponse : IgdbMetadataStatus.TransportFailure;
-        IgdbMetadataSection<IReadOnlyList<IgdbTaxonomyResult>> Taxonomy() => new(status, Failure: error.Failure);
+        IgdbMetadataSection<IReadOnlyList<IgdbTaxonomyResult>> Taxonomy() => new(status, Failure: error.Failure, StatusCode: error.StatusCode, RetryAfter: error.RetryAfter);
         return new(id, Taxonomy(), Taxonomy(), Taxonomy(), Taxonomy(), Taxonomy(),
-            new(status, Failure: error.Failure), new(status, Failure: error.Failure));
+            new(status, Failure: error.Failure, StatusCode: error.StatusCode, RetryAfter: error.RetryAfter),
+            new(status, Failure: error.Failure, StatusCode: error.StatusCode, RetryAfter: error.RetryAfter));
     }
 }
