@@ -12,6 +12,25 @@ public sealed class GameEnrichmentCoordinatorTests
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(15);
 
     [Fact]
+    public async Task AttemptSequencesAreUniqueAcrossConcurrentLeasesAndCoordinators()
+    {
+        var c = new GameEnrichmentCoordinator(); var start = Signal();
+        var tasks = Enumerable.Range(1, 32).Select(i => Task.Run(async () =>
+        {
+            await start.Task; using var lease = await c.AcquireGameAsync(i);
+            var ids = Enumerable.Range(0, 20).Select(_ => lease.CreateAttempt(NextGameAI.Web.Models.CatalogMetadataSection.Genres)).ToArray();
+            Assert.All(ids.Zip(ids.Skip(1)), p => Assert.True(p.First.Sequence < p.Second.Sequence));
+            Assert.All(ids, id => Assert.Equal(i, id.GameId)); return ids;
+        })).ToArray();
+        start.SetResult(); var all = (await Task.WhenAll(tasks).WaitAsync(Deadline)).SelectMany(x => x).ToArray();
+        Assert.Equal(640, all.Select(x => x.Sequence).Distinct().Count());
+        var next = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        Assert.True(next.CreateAttempt(NextGameAI.Web.Models.CatalogMetadataSection.Themes).Sequence > all.Max(x => x.Sequence));
+        Assert.Throws<ArgumentOutOfRangeException>(() => next.CreateAttempt((NextGameAI.Web.Models.CatalogMetadataSection)99));
+        next.Dispose(); Assert.Throws<ObjectDisposedException>(() => next.CreateAttempt(NextGameAI.Web.Models.CatalogMetadataSection.Genres));
+    }
+
+    [Fact]
     public async Task SameGameWaitsAndDifferentGameRunsIndependently()
     {
         var c = new GameEnrichmentCoordinator();

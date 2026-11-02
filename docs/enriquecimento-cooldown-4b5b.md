@@ -46,3 +46,43 @@ Falhas de persistência não têm escrita compensatória nem fallback persistido
 O componente não guarda payloads, keywords, tokens, headers, exceções, DbContext ou clientes HTTP.
 Entidades e migrations permanecem inalteradas. Coordenação, concorrência e integração da execução
 não fazem parte desta entrega.
+
+## Evolução 4B.5C.2 — identidade e prazo fixo
+
+`GameLease.CreateAttempt(section)` emite uma identidade com GameId, seção e sequência
+monotônica compartilhada no processo, independente do relógio. A emissão exige lease ativo,
+não confirma sucesso e não altera cooldown. O contador não dá a volta: esgotamento é rejeitado.
+Não há persistência da sequência nem mudança nos serviços reais de enriquecimento.
+
+`PrepareResult(identity, persistedAttemptAtUtc, clientCompletedAtUtc, result)` prepara uma
+observação imutável, sem publicar no cache. O primeiro instante corresponde ao estado
+persistido; o segundo deve ser capturado após a conclusão do cliente IGDB. O contrato atual
+do transporte não expõe o instante original da resposta: datas HTTP absolutas já chegam
+normalizadas como duração. A referência posterior pode prolongar conservadoramente a espera.
+
+A observação contém o prazo absoluto UTC calculado uma única vez, incluindo o mínimo de
+15 minutos para 429. Esperar pela escrita não reaplica a duração; reavaliar e republicar
+a mesma observação não desloca seu prazo. Instantes locais ou futuros são rejeitados.
+Não é possível verificar mecanicamente se o chamador capturou a referência depois do HTTP;
+isso será responsabilidade da integração e de seus testes na 4B.5C.3.
+
+`RecordConfirmed(observation)` deve ser chamado somente após commit confirmado, antes de
+liberar o jogo. Preparar um sucesso ou emitir outra sequência não limpa cooldown anterior.
+`RecordPersistenceFailure(identity, failedAtUtc)` registra somente um minuto em memória
+após rollback. Cancelamento não publica observação; NotRequested não prepara observação.
+
+Sequências antigas não substituem entradas mais recentes, mesmo com timestamp igual.
+Entre falhas novas ou observações da mesma tentativa, preserva-se o maior prazo conhecido.
+Uma confirmação de sucesso mais recente invalida falhas anteriores. Repetições da mesma
+identidade devem manter timestamp persistido e referência temporal; alterações são rejeitadas.
+A sequência não dispensa a correspondência com o estado persistido na avaliação.
+
+As assinaturas antigas permanecem para compatibilidade, sem identidade monotônica.
+Elas não substituem entradas identificadas já presentes e não devem ser usadas pela futura
+integração temporal: seu parâmetro de timestamp ainda é também a referência do prazo relativo.
+Em colisões de falhas legadas preserva-se o maior prazo conhecido.
+
+O limite de 1.024 entradas, limpeza oportunista, marcas de sucesso por 24 horas e fallback
+após reinício/evicção continuam válidos. Ordenação de resultados atrasados depende da marca
+em memória ainda retida; após sua perda não há histórico durável de sequências.
+O scheduler continua independente e inalterado. Nenhum retry HTTP ou SQLite foi criado.

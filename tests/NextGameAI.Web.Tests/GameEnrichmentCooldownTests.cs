@@ -207,10 +207,187 @@ public sealed class GameEnrichmentCooldownTests
         var fields = typeof(GameEnrichmentCooldown).GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.DoesNotContain(fields, f => f.FieldType == typeof(HttpClient) || f.FieldType == typeof(CancellationTokenSource));
         var attempt = typeof(GameEnrichmentCooldown).GetNestedType("Attempt", System.Reflection.BindingFlags.NonPublic)!;
-        Assert.All(attempt.GetProperties(), p => Assert.True(p.PropertyType == typeof(DateTime) || p.PropertyType.IsEnum));
+        Assert.All(attempt.GetProperties(), p => Assert.True(p.PropertyType == typeof(DateTime) || p.PropertyType == typeof(long) || p.PropertyType.IsEnum));
         var services = new ServiceCollection(); services.AddSingleton<TimeProvider>(clock); services.AddIgdbSearch();
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         Assert.Same(provider.GetRequiredService<GameEnrichmentCooldown>(), provider.GetRequiredService<GameEnrichmentCooldown>());
         Assert.Same(clock, provider.GetRequiredService<TimeProvider>());
+    }
+
+    private static TaxonomyEnrichmentResult Limited(int minutes, CatalogMetadataSection section = Section) =>
+        new(section, TaxonomyEnrichmentOutcome.ExternalFailure, IgdbMetadataStatus.TransportFailure,
+            IgdbQueryFailure.RateLimited, HttpStatusCode.TooManyRequests, TimeSpan.FromMinutes(minutes));
+
+    [Theory]
+    [InlineData(40, 40)] [InlineData(5, 15)] [InlineData(15, 15)] [InlineData(-1, 15)]
+    public async Task IdentifiedAttemptUsesPostClientReferenceAndFixedAbsoluteDeadline(int minutes, int expected)
+    {
+        var c = new GameEnrichmentCoordinator(); using var game = await c.AcquireGameAsync(1);
+        var id = game.CreateAttempt(Section); var started = clock.Now;
+        clock.Now = clock.Now.AddMinutes(10); var completed = clock.Now;
+        var policy = Create(); var observation = policy.PrepareResult(id, started, completed, Limited(minutes))!;
+        Assert.Equal(completed.AddMinutes(expected), observation.UntilUtc);
+        Assert.Equal(DateTimeKind.Utc, observation.UntilUtc.Kind);
+        clock.Now = clock.Now.AddMinutes(3); // Simulated wait for writing/commit.
+        policy.RecordConfirmed(observation);
+        Assert.Equal(observation.UntilUtc, policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+        clock.Now = clock.Now.AddMinutes(1); policy.RecordConfirmed(observation);
+        Assert.Equal(observation.UntilUtc, policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+        Assert.Equal(started, observation.PersistedAttemptAtUtc);
+        Assert.Equal(completed, observation.ReferenceAtUtc);
+    }
+
+    [Theory]
+    [InlineData(15, 40, false, 40)] [InlineData(40, 15, false, 40)]
+    [InlineData(15, 40, true, 40)] [InlineData(40, 15, true, 40)]
+    public async Task EqualTimestampsNeverLoseLongerDeadline(int first, int second, bool sameIdentity, int expected)
+    {
+        using var game = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var a = game.CreateAttempt(Section); var b = sameIdentity ? a : game.CreateAttempt(Section);
+        var policy = Create();
+        policy.RecordConfirmed(policy.PrepareResult(a, clock.Now, clock.Now, Limited(first))!);
+        policy.RecordConfirmed(policy.PrepareResult(b, clock.Now, clock.Now, Limited(second))!);
+        Assert.Equal(clock.Now.AddMinutes(expected), policy.Evaluate(1, Section, State()).NextAllowedAtUtc);
+    }
+
+    [Fact]
+    public async Task LateOldFailureCannotReplaceNewerFailureOrConfirmedSuccess()
+    {
+        using var game = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var old = game.CreateAttempt(Section); var current = game.CreateAttempt(Section);
+        var policy = Create(); var time = clock.Now;
+        var delayed = policy.PrepareResult(old, time, time, Limited(120))!;
+        policy.RecordConfirmed(policy.PrepareResult(current, time, time, Limited(15))!);
+        policy.RecordConfirmed(delayed);
+        Assert.Equal(time.AddMinutes(15), policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+        var successId = game.CreateAttempt(Section);
+        var success = policy.PrepareResult(successId, time, time, new(Section, TaxonomyEnrichmentOutcome.Applied, IgdbMetadataStatus.Success, null))!;
+        Assert.True(policy.Evaluate(1, Section, null).CooldownActive); // Issued/prepared is not confirmed.
+        policy.RecordConfirmed(success); policy.RecordConfirmed(delayed);
+        Assert.False(policy.Evaluate(1, Section, null).CooldownActive);
+        var newer = game.CreateAttempt(Section);
+        policy.RecordConfirmed(policy.PrepareResult(newer, time, time, Limited(40))!);
+        Assert.True(policy.Evaluate(1, Section, null).CooldownActive);
+    }
+
+    [Fact]
+    public async Task IdentityStillRequiresCorrectPersistedGameSectionAndTimestamp()
+    {
+        using var game = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var id = game.CreateAttempt(Section); var policy = Create();
+        Assert.Throws<ArgumentException>(() => policy.PrepareResult(id, clock.Now, clock.Now, Limited(40, CatalogMetadataSection.Themes)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => policy.PrepareResult(default, clock.Now, clock.Now, Limited(40)));
+        policy.RecordConfirmed(policy.PrepareResult(id, clock.Now, clock.Now, Limited(40))!);
+        Assert.True(policy.Evaluate(2, Section, null).CanAttempt);
+        Assert.True(policy.Evaluate(1, CatalogMetadataSection.Themes, null).CanAttempt);
+        var state = State(); state.LastAttemptAtUtc = state.LastAttemptAtUtc.AddTicks(-1);
+        Assert.Equal(CooldownOrigin.Persisted, policy.Evaluate(1, Section, state).Origin);
+        Assert.Throws<ArgumentException>(() => policy.Evaluate(2, Section, state));
+    }
+
+    [Fact]
+    public async Task RollbackRecordsOnlyOneMinuteAndPreparationDoesNotClaimSuccess()
+    {
+        using var game = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var id = game.CreateAttempt(Section); var policy = Create();
+        _ = policy.PrepareResult(id, clock.Now, clock.Now, new(Section, TaxonomyEnrichmentOutcome.Applied, IgdbMetadataStatus.Success, null));
+        Assert.Equal(0, policy.Count);
+        policy.RecordPersistenceFailure(id, clock.Now);
+        Assert.Equal(clock.Now.AddMinutes(1), policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+        Assert.Equal(EnrichmentFreshness.NeverQueried, policy.Evaluate(1, Section, null).Freshness);
+    }
+
+    [Fact]
+    public async Task RestartEvictionAndExpiryKeepExistingFallbackAndCapacity()
+    {
+        var c = new GameEnrichmentCoordinator(); var policy = Create();
+        using (var game = await c.AcquireGameAsync(1))
+            policy.RecordConfirmed(policy.PrepareResult(game.CreateAttempt(Section), clock.Now, clock.Now, Limited(40))!);
+        Assert.Equal(clock.Now.AddMinutes(15), Create().Evaluate(1, Section, State()).NextAllowedAtUtc);
+        for (var i = 2; i <= GameEnrichmentCooldown.Capacity + 1; i++)
+        {
+            clock.Now = clock.Now.AddTicks(1);
+            using var game = await c.AcquireGameAsync(i);
+            policy.RecordConfirmed(policy.PrepareResult(game.CreateAttempt(Section), clock.Now, clock.Now, Limited(40))!);
+        }
+        Assert.Equal(GameEnrichmentCooldown.Capacity, policy.Count);
+        Assert.Equal(CooldownOrigin.Persisted, policy.Evaluate(1, Section, State()).Origin);
+        clock.Now = clock.Now.AddMinutes(40); Assert.Equal(0, policy.Count);
+    }
+
+    [Fact]
+    public async Task ConcurrentRecordPreservesMaximumAndNewSuccessWatermark()
+    {
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var game = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var id = game.CreateAttempt(Section); var policy = Create();
+        var observations = Enumerable.Range(15, 32).Select(m => policy.PrepareResult(id, clock.Now, clock.Now, Limited(m))!).ToArray();
+        var tasks = observations.Select(o => Task.Run(async () => { await start.Task; policy.RecordConfirmed(o); })).ToArray();
+        start.SetResult(); await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(clock.Now.AddMinutes(46), policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+    }
+
+    [Fact]
+    public async Task InvalidReferencesAreRejectedAndNotRequestedRemainsNeutral()
+    {
+        using var game = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var id = game.CreateAttempt(Section); var policy = Create();
+        Assert.Throws<ArgumentException>(() => policy.PrepareResult(id, clock.Now, clock.Now.AddTicks(1), Limited(40)));
+        Assert.Throws<ArgumentException>(() => policy.PrepareResult(id, clock.Now, DateTime.SpecifyKind(clock.Now, DateTimeKind.Local), Limited(40)));
+        Assert.Null(policy.PrepareResult(id, clock.Now, clock.Now, new(Section, TaxonomyEnrichmentOutcome.InvalidResponse, IgdbMetadataStatus.NotRequested, null)));
+        Assert.Equal(0, policy.Count);
+        var first = policy.PrepareResult(id, clock.Now, clock.Now, Limited(40))!; policy.RecordConfirmed(first);
+        clock.Now = clock.Now.AddMinutes(1);
+        Assert.Throws<ArgumentException>(() => policy.RecordConfirmed(policy.PrepareResult(id, first.PersistedAttemptAtUtc, clock.Now, Limited(40))!));
+        Assert.Equal(first.UntilUtc, policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+    }
+
+    [Fact]
+    public async Task CancellationAfterPreparationPublishesNothingAndDoesNotClearEarlierFailure()
+    {
+        using var game = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var policy = Create(); var old = game.CreateAttempt(Section);
+        var first = policy.PrepareResult(old, clock.Now, clock.Now, Limited(40))!; policy.RecordConfirmed(first);
+        var next = game.CreateAttempt(Section);
+        using var cancellation = new CancellationTokenSource();
+        _ = policy.PrepareResult(next, clock.Now, clock.Now, new(Section, TaxonomyEnrichmentOutcome.Applied, IgdbMetadataStatus.Success, null));
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => cancellation.Token.ThrowIfCancellationRequested());
+        Assert.Equal(first.UntilUtc, policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+    }
+
+    [Fact]
+    public async Task NewIdentityOrdersAttemptsWithoutDependingOnClockResolutionOrDirection()
+    {
+        using var game = await new GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var a = game.CreateAttempt(Section); var policy = Create();
+        policy.RecordConfirmed(policy.PrepareResult(a, clock.Now, clock.Now, Limited(40))!);
+        var b = game.CreateAttempt(Section); var earlier = clock.Now.AddTicks(-1);
+        policy.RecordConfirmed(policy.PrepareResult(b, earlier, earlier, Limited(60))!);
+        Assert.Equal(earlier.AddMinutes(60), policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+        policy.RecordConfirmed(policy.PrepareResult(a, clock.Now, clock.Now, Limited(120))!);
+        Assert.Equal(earlier.AddMinutes(60), policy.Evaluate(1, Section, null).NextAllowedAtUtc);
+    }
+
+    [Fact]
+    public async Task IdentifiedUpdatesAndEvictionStayBoundedUnderConcurrentPublication()
+    {
+        var c = new GameEnrichmentCoordinator(); var policy = Create();
+        var observations = new List<EnrichmentCooldownObservation>();
+        for (var i = 1; i <= GameEnrichmentCooldown.Capacity + 32; i++)
+        {
+            using var game = await c.AcquireGameAsync(i);
+            observations.Add(policy.PrepareResult(game.CreateAttempt(Section), clock.Now, clock.Now, Limited(40))!);
+        }
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = observations.Select(o => Task.Run(async () =>
+        {
+            await start.Task;
+            policy.RecordConfirmed(o); policy.RecordConfirmed(o);
+            Assert.InRange(policy.Count, 1, GameEnrichmentCooldown.Capacity);
+        })).ToArray();
+        start.SetResult(); await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(GameEnrichmentCooldown.Capacity, policy.Count);
+        clock.Now = clock.Now.AddMinutes(40); Assert.Equal(0, policy.Count);
     }
 }

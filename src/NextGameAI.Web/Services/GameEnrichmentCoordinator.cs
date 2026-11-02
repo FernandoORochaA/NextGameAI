@@ -1,5 +1,14 @@
 namespace NextGameAI.Web.Services;
 
+public readonly record struct EnrichmentAttemptId
+{
+    public long Sequence { get; }
+    public int GameId { get; }
+    public Models.CatalogMetadataSection Section { get; }
+    internal EnrichmentAttemptId(long sequence, int gameId, Models.CatalogMetadataSection section)
+    { Sequence = sequence; GameId = gameId; Section = section; }
+}
+
 public sealed class EnrichmentCapacityException() : InvalidOperationException("A capacidade de operações de enriquecimento foi atingida.");
 
 // Process-local, inert until explicitly acquired. Never retains database/HTTP services.
@@ -12,6 +21,17 @@ public sealed class GameEnrichmentCoordinator(int capacity = 1024)
     private readonly object gate = new();
     private readonly Dictionary<int, Entry> entries = [];
     private readonly SemaphoreSlim writer = new(1, 1);
+    private static long lastAttempt;
+
+    private static long NextAttempt()
+    {
+        while (true)
+        {
+            var previous = Volatile.Read(ref lastAttempt);
+            if (previous == long.MaxValue) throw new InvalidOperationException("A sequência de tentativas foi esgotada.");
+            if (Interlocked.CompareExchange(ref lastAttempt, previous + 1, previous) == previous) return previous + 1;
+        }
+    }
     internal sealed class Entry
     {
         internal readonly SemaphoreSlim Semaphore = new(1, 1);
@@ -66,6 +86,17 @@ public sealed class GameEnrichmentCoordinator(int capacity = 1024)
         private bool disposed, writing;
         internal GameLease(GameEnrichmentCoordinator owner, int gameId, Entry entry)
         { this.owner = owner; this.gameId = gameId; this.entry = entry; }
+
+        // Issuing an identity does not record an outcome or confirm any database write.
+        public EnrichmentAttemptId CreateAttempt(Models.CatalogMetadataSection section)
+        {
+            lock (sync)
+            {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                if (!Enum.IsDefined(section)) throw new ArgumentOutOfRangeException(nameof(section));
+                return new(NextAttempt(), gameId, section);
+            }
+        }
 
         // There is intentionally no coordinator-level AcquireWrite: an active game lease is required.
         public async Task<WriteLease> AcquireWriteAsync(CancellationToken cancellationToken = default)

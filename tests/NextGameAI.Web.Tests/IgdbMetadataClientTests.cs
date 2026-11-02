@@ -341,6 +341,17 @@ public sealed class IgdbMetadataClientTests
         var decision = policy.Evaluate(1, NextGameAI.Web.Models.CatalogMetadataSection.Genres, null);
         Assert.Equal(start.AddHours(2).UtcDateTime, decision.NextAllowedAtUtc);
         Assert.Single(f.Requests);
+        // The new contract anchors once after the client, then survives a delayed commit/publication.
+        using var game = await new NextGameAI.Web.Services.GameEnrichmentCoordinator().AcquireGameAsync(1);
+        var identity = game.CreateAttempt(NextGameAI.Web.Models.CatalogMetadataSection.Genres);
+        var completed = f.Clock.GetUtcNow().UtcDateTime;
+        var observation = policy.PrepareResult(identity, completed, completed,
+            new(NextGameAI.Web.Models.CatalogMetadataSection.Genres,
+                NextGameAI.Web.Services.TaxonomyEnrichmentOutcome.ExternalFailure, external.Genres.Status,
+                external.Genres.Failure, external.Genres.StatusCode, external.Genres.RetryAfter))!;
+        f.Clock.Advance(TimeSpan.FromMinutes(5)); policy.RecordConfirmed(observation);
+        Assert.Equal(start.AddHours(2).UtcDateTime, policy.Evaluate(1, NextGameAI.Web.Models.CatalogMetadataSection.Genres, null).NextAllowedAtUtc);
+        Assert.Single(f.Requests);
     }
 
     [Fact]
