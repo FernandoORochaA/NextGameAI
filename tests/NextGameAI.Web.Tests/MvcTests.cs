@@ -14,32 +14,6 @@ using NextGameAI.Web.ViewModels;
 
 namespace NextGameAI.Web.Tests;
 
-public sealed class LibraryApplication : WebApplicationFactory<Program>
-{
-    private readonly SqliteConnection connection = new("Data Source=:memory:;Foreign Keys=True");
-
-    public LibraryApplication() => connection.Open();
-
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
-    {
-        builder.UseEnvironment("Testing");
-        builder.ConfigureServices(services =>
-        {
-            services.RemoveAll<DbContextOptions<NextGameAiDbContext>>();
-            services.RemoveAll<IDbContextOptionsConfiguration<NextGameAiDbContext>>();
-            services.AddDbContext<NextGameAiDbContext>(options => options.UseSqlite(connection));
-            using var db = new NextGameAiDbContext(new DbContextOptionsBuilder<NextGameAiDbContext>().UseSqlite(connection).Options);
-            db.Database.Migrate();
-        });
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        base.Dispose(disposing);
-        if (disposing) connection.Dispose();
-    }
-}
-
 public class MvcTests
 {
     private static HttpClient Client(LibraryApplication app) => app.CreateClient(new()
@@ -68,6 +42,7 @@ public class MvcTests
 
     private static string Decode(string text) => WebUtility.HtmlDecode(text);
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task BrowserFormsCreateReadEditAndDeleteWithAntiforgery()
     {
@@ -110,6 +85,7 @@ public class MvcTests
         Assert.Empty(await db.GameOwnerships.ToListAsync());
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("missing")] [InlineData("duplicate")] [InlineData("rating")]
     [InlineData("status")] [InlineData("text")] [InlineData("malformed")]
@@ -135,6 +111,7 @@ public class MvcTests
         Assert.Empty(await scope.ServiceProvider.GetRequiredService<NextGameAiDbContext>().Games.ToListAsync());
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("/Library/Create")] [InlineData("/Library/Edit/1")] [InlineData("/Library/Delete/1")]
     public async Task MutationsWithoutAntiforgeryAreRejected(string path)
@@ -143,6 +120,7 @@ public class MvcTests
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsync(path, new FormUrlEncodedContent([]))).StatusCode);
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("/Library/Details/999")] [InlineData("/Library/Edit/999")] [InlineData("/Library/Delete/999")]
     public async Task UnknownEntryReturnsNotFound(string path)
@@ -151,6 +129,7 @@ public class MvcTests
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(path)).StatusCode);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task MainFormHasFiveStarsAndNoTechnicalCatalogOrOwnershipFields()
     {
@@ -165,6 +144,7 @@ public class MvcTests
         Assert.Equal(5, Regex.Matches(html, "type=\"checkbox\" name=\"SelectedPlatforms\"").Count);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task LegacyEditGroupsPlatformsAndIgnoresPostedTechnicalFields()
     {
@@ -213,6 +193,7 @@ public class MvcTests
             Assert.Contains(entry.Ownerships, x => x.Id == old.Id && x.StoreId == old.StoreId && x.PlatformId == old.PlatformId);
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("/Library")]
     [InlineData("/Library/Details/1")]
@@ -255,6 +236,7 @@ public class MvcTests
         Assert.True(await verify.GameOwnerships.AnyAsync(x => x.Store.Code == "playstation-store" && x.Platform.Code == "ps5"));
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("pc", "PC")]
     [InlineData("playstation", "PlayStation")]
@@ -273,6 +255,7 @@ public class MvcTests
         Assert.DoesNotContain("Loja não informada", html);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task RemovalRequiresExplicitConfirmationAndRetainsSubmittedValuesOnError()
     {
@@ -327,6 +310,7 @@ public class MvcTests
         Assert.Equal(7, entry.Rating);
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("empty")]
     [InlineData("unknown")]
@@ -352,6 +336,7 @@ public class MvcTests
         Assert.Null((await verify.LibraryEntries.SingleAsync()).Rating);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task MultipleRemovalsNameEachPlatformAndKeepEachConfirmationRequired()
     {

@@ -28,6 +28,7 @@ public sealed class LibraryTests : IDisposable
         Ownerships = [new() { StoreId = 1, PlatformId = 1 }]
     };
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CreatesValidEntryAndReadsFromNewContext()
     {
@@ -42,6 +43,7 @@ public sealed class LibraryTests : IDisposable
         Assert.True(entry.AddedAtUtc > DateTime.UtcNow.AddMinutes(-1));
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(null)] [InlineData(0)] [InlineData(1)] [InlineData(7)] [InlineData(10)]
     public async Task PreservesUnratedZeroAndHalfStars(int? rating)
@@ -52,6 +54,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Equal(rating, (await db.LibraryEntries.FindAsync(id))!.Rating);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(-1)] [InlineData(11)]
     public async Task RejectsOutOfRangeRatingWithoutPartialCatalog(int rating)
@@ -62,6 +65,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Empty(await db.LibraryEntries.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RequiresOwnership()
     {
@@ -70,6 +74,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Empty(await db.Games.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(0, 1)] [InlineData(1, 0)] [InlineData(999, 1)] [InlineData(1, 999)]
     public async Task RejectsMissingOrUnknownReferences(int storeId, int platformId)
@@ -79,6 +84,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Empty(await db.Games.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task SupportsMultipleOwnershipsAndAtomicReplacement()
     {
@@ -95,6 +101,7 @@ public sealed class LibraryTests : IDisposable
         Assert.True(await db.GameOwnerships.AnyAsync(x => x.StoreId == 4 && x.PlatformId == 3));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RejectsDuplicateOwnerships()
     {
@@ -103,6 +110,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Empty(await db.Games.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task ReusesCatalogAndRejectsDuplicateLibraryEntry()
     {
@@ -114,6 +122,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Single(await db.LibraryEntries.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task SameTitleDoesNotMergeDistinctCatalogRecords()
     {
@@ -121,6 +130,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Equal(2, await db.Games.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(LibraryStatus.NotStarted)] [InlineData(LibraryStatus.Playing)]
     [InlineData(LibraryStatus.Completed)] [InlineData(LibraryStatus.Abandoned)]
@@ -137,6 +147,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Equal(next == LibraryStatus.Abandoned ? "Não gostei" : null, entry.AbandonmentReason);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)] [InlineData(4)]
     public async Task RejectsTextOverflow(int field)
@@ -154,6 +165,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Empty(await db.Games.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task AcceptsTextLimitsAndAbandonmentWithoutReason()
     {
@@ -167,6 +179,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Null((await db.LibraryEntries.FindAsync(id))!.AbandonmentReason);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task InvalidEditLeavesExistingDataIntact()
     {
@@ -179,6 +192,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Equal(1, (await db.GameOwnerships.SingleAsync()).StoreId);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CatalogCannotBeReplacedDuringEdit()
     {
@@ -188,6 +202,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Single(await db.Games.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task DeletePreservesSharedCatalogAndReferences()
     {
@@ -205,6 +220,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Equal(6, await db.Platforms.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task OtherProfileEntriesAreNotAccessible()
     {
@@ -217,6 +233,7 @@ public sealed class LibraryTests : IDisposable
         await Assert.ThrowsAsync<KeyNotFoundException>(() => library.SaveAsync(input, other.Id));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task SqliteEnforcesUniqueEntryAndOwnership()
     {
@@ -228,6 +245,7 @@ public sealed class LibraryTests : IDisposable
             $"INSERT INTO GameOwnerships (LibraryEntryId, StoreId, PlatformId) VALUES ({id}, 1, 1)"));
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("Rating", "-1")] [InlineData("Rating", "11")] [InlineData("Status", "4")]
     [InlineData("AbandonmentReason", "indevido")]
@@ -243,6 +261,7 @@ public sealed class LibraryTests : IDisposable
         await Assert.ThrowsAsync<SqliteException>(() => db.Database.ExecuteSqlRawAsync(sql, value, id));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task SqliteEnforcesIgdbUniquenessButAllowsSeveralNulls()
     {
@@ -253,6 +272,7 @@ public sealed class LibraryTests : IDisposable
         await Assert.ThrowsAsync<SqliteException>(() => db.Database.ExecuteSqlRawAsync("UPDATE Platforms SET IgdbId = 123 WHERE Id = 2"));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task SqliteEnforcesReferenceCodesAndRestrictsCatalogDeletion()
     {
@@ -265,6 +285,7 @@ public sealed class LibraryTests : IDisposable
         await Assert.ThrowsAsync<SqliteException>(() => db.Database.ExecuteSqlRawAsync("DELETE FROM Platforms WHERE Id = 1"));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task DbFailureRollsBackNewCatalogAndEntry()
     {
@@ -276,6 +297,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Empty(await db.GameOwnerships.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task DbFailureDuringEditRestoresStatusAndPreviousOwnership()
     {
@@ -289,6 +311,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Equal(1, (await db.GameOwnerships.SingleAsync()).StoreId);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RejectsUndefinedStatusBeforeWriting()
     {
@@ -297,6 +320,7 @@ public sealed class LibraryTests : IDisposable
         Assert.Empty(await db.Games.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task EntityValidationEnforcesReferenceTextLimits()
     {
@@ -310,6 +334,7 @@ public sealed class LibraryTests : IDisposable
         await Assert.ThrowsAsync<ValidationException>(() => db.SaveChangesAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task MigrationsAndSeedAreRepeatable()
     {

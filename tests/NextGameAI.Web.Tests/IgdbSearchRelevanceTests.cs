@@ -7,6 +7,7 @@ public sealed class IgdbSearchRelevanceTests
     private static IgdbGameResult Game(long id, string title, long? type = null, string? edition = null, long? parent = null) =>
         new(id, title, null, null, type, null, edition, parent);
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("Resident Evil 4", "Resident Evil 4", "Resident Evil 4 Bundle", 0)]
     [InlineData("Persona 5 Royal", "Persona 5 Royal", "Persona 5", 10)]
@@ -20,6 +21,7 @@ public sealed class IgdbSearchRelevanceTests
         Assert.Equal(new long[] { 2, 1 }, games.Select(g => g.IgdbId));
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("  AÇÃO   HEROICA ", "Ação Heroica")]
     [InlineData("acao heroica", "Ação Heroica")]
@@ -30,6 +32,7 @@ public sealed class IgdbSearchRelevanceTests
         Assert.Equal(2, games[0].IgdbId);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void TypePriorityIsExplicitAndUnknownTypesRemain()
     {
@@ -38,6 +41,7 @@ public sealed class IgdbSearchRelevanceTests
         Assert.Equal(new long?[] { 0, 8, 9, 10, 11, 4, 999, 2, 1, 3 }, results.Select(g => g.GameTypeId));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void EditionMetadataMatchesExplicitEditionQueryAndKeepsParent()
     {
@@ -47,6 +51,7 @@ public sealed class IgdbSearchRelevanceTests
         Assert.Equal(1, results[0].VersionParentIgdbId);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void FullWordMatchAndPrefixOutrankPartiallyRelatedTitles()
     {
@@ -56,6 +61,7 @@ public sealed class IgdbSearchRelevanceTests
         Assert.Equal(new long[] { 3, 2, 1 }, results.Select(g => g.IgdbId));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void TiesKeepExternalOrderRegardlessOfYearAndDistinctIds()
     {
@@ -65,6 +71,7 @@ public sealed class IgdbSearchRelevanceTests
         Assert.Equal(new long[] { 8, 3 }, results.Select(g => g.IgdbId));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void MissingMetadataDoesNotDropResultsAndDoesNotMutateCandidates()
     {
@@ -74,6 +81,7 @@ public sealed class IgdbSearchRelevanceTests
         Assert.Equal(7, input[0].IgdbId); Assert.Same(input[1], results[0]);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void RanksBeforeTakingTen()
     {

@@ -9,7 +9,8 @@ public static class IgdbSearchServiceCollectionExtensions
         services.TryAddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IgdbQueryCache>();
         services.AddSingleton<IgdbRequestScheduler>();
-        services.AddHttpClient<IIgdbClient, IgdbClient>(client =>
+        services.AddTransient<IIgdbClient, IgdbClient>();
+        services.AddHttpClient<IgdbApiTransport>(client =>
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
             client.MaxResponseContentBufferSize = 256 * 1024;

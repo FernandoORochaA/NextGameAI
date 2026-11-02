@@ -54,6 +54,7 @@ public sealed class CatalogTests
         public void Dispose() { Http.Dispose(); app.Dispose(); original.Dispose(); }
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task PageAndMenuAreAccessibleWithoutGamesAndDoNotSearch()
     {
@@ -68,6 +69,7 @@ public sealed class CatalogTests
         Assert.Equal(0, f.Igdb.Calls);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task LibraryAddButtonLeadsToSearch()
     {
@@ -80,6 +82,7 @@ public sealed class CatalogTests
         Assert.Equal(0, f.Igdb.Calls);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task ManualAlternativeRemainsAvailableAfterExternalFailure()
     {
@@ -95,6 +98,7 @@ public sealed class CatalogTests
         Assert.Equal(1, f.Igdb.Calls);
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData(null)] [InlineData("")] [InlineData(" ")] [InlineData("ab")]
     [InlineData("line\nbreak")] [InlineData("abc\u200bxyz")]
@@ -107,6 +111,7 @@ public sealed class CatalogTests
         Assert.Equal(0, f.Igdb.Calls);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task ExcessivelyLongTermIsRejectedBeforeService()
     {
@@ -115,6 +120,7 @@ public sealed class CatalogTests
         Assert.Equal(0, f.Igdb.Calls);
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("Halo")] [InlineData("Resident Evil 4")] [InlineData("Ação e aventura")]
     public async Task ValidTermsReachService(string term)
@@ -125,6 +131,7 @@ public sealed class CatalogTests
         Assert.Equal(1, f.Igdb.Calls);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task CompleteResultsUseSafeCoversAndKeepIdenticalTitlesIndependent()
     {
@@ -142,6 +149,7 @@ public sealed class CatalogTests
         Assert.Contains("no-store", response.Headers.CacheControl!.ToString());
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task OptionalMetadataCanBeMissingAndArbitraryImageUrlsAreRejected()
     {
@@ -153,6 +161,7 @@ public sealed class CatalogTests
         Assert.Null(games[0].EditionTitle); Assert.Null(games[1].CoverUrl);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task EmptyResultIsSuccessfulAndMaximumIsTen()
     {
@@ -162,6 +171,7 @@ public sealed class CatalogTests
         Assert.Equal(10, (await f.Http.GetFromJsonAsync<CatalogGameResult[]>("/Catalog/Search?term=Resident"))!.Length);
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData(IgdbQueryFailure.Unavailable, 503, "unavailable")]
     [InlineData(IgdbQueryFailure.Timeout, 503, "unavailable")]
@@ -182,6 +192,7 @@ public sealed class CatalogTests
         Assert.False(json.TryGetProperty("stackTrace", out _));
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task UnexpectedErrorsNeverExposeSensitiveMessages()
     {
@@ -195,6 +206,7 @@ public sealed class CatalogTests
         Assert.Contains("unexpected", body);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task JsonContainsOnlyPublicFieldsAndEncodesUntrustedText()
     {
@@ -209,6 +221,7 @@ public sealed class CatalogTests
         Assert.Equal("<script>alert('x')</script>", json.RootElement[0].GetProperty("title").GetString());
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task LocalEndpointHasBoundedRateLimit()
     {
@@ -221,6 +234,7 @@ public sealed class CatalogTests
         Assert.Equal(30, f.Igdb.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CancellationTokenReachesService()
     {
@@ -233,6 +247,7 @@ public sealed class CatalogTests
         Assert.Equal(499, Assert.IsType<StatusCodeResult>(await new CatalogController(fake).Search("Resident", cts.Token)).StatusCode);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task SearchPreservesExistingLibrary()
     {

@@ -70,6 +70,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Null(error.InnerException);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task PostsFormToFixedEndpointAndReusesToken()
     {
@@ -92,6 +93,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Equal(1, test.Http.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task ReplacesExpiredTokenAndAppliesSafetyMargin()
     {
@@ -108,6 +110,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Equal(3, test.Http.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task ShortLivedTokenDoesNotUseFixedSixtySecondMargin()
     {
@@ -121,6 +124,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Equal(2, test.Http.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task ConcurrentRequestsShareSingleAcquisitionAndRenewal()
     {
@@ -140,6 +144,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Equal(2, test.Http.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task OldUnauthorizedResponseCannotInvalidateNewToken()
     {
@@ -155,6 +160,7 @@ public sealed class IgdbTokenProviderTests
         Assert.NotEqual(current, await test.Provider.GetTokenAsync());
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("client")] [InlineData("secret")] [InlineData("blank")]
     [InlineData("disabled")] [InlineData("timeout-low")] [InlineData("timeout-high")]
@@ -178,6 +184,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Equal(0, test.Http.Calls);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(400)] [InlineData(401)] [InlineData(429)] [InlineData(500)] [InlineData(503)] [InlineData(302)]
     public async Task HttpFailuresNeverDiscloseResponseBody(int status)
@@ -190,6 +197,7 @@ public sealed class IgdbTokenProviderTests
         AssertSafe(error);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("null")] [InlineData("{}")] [InlineData("not json")]
     [InlineData("{\"access_token\":\"synthetic-token\",\"expires_in\":0,\"token_type\":\"bearer\"}")]
@@ -209,6 +217,7 @@ public sealed class IgdbTokenProviderTests
         AssertSafe(error);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task HandlesTimeoutAndCanRecoverOnNextRequest()
     {
@@ -224,6 +233,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Equal(TestToken, await test.Provider.GetTokenAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CallerCancellationReleasesGateWithoutLeakingUnderlyingError()
     {
@@ -245,6 +255,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Equal(TestToken, await test.Provider.GetTokenAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CanceledWaiterDoesNotCancelSharedAcquisition()
     {
@@ -260,6 +271,7 @@ public sealed class IgdbTokenProviderTests
         Assert.Equal(1, test.Http.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task NetworkErrorsDoNotRetainSensitiveInnerExceptions()
     {
@@ -269,6 +281,7 @@ public sealed class IgdbTokenProviderTests
         AssertSafe(error);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RegistrationBindsOptionsAndUsesSingletonWithoutRequestingToken()
     {
@@ -291,6 +304,7 @@ public sealed class IgdbTokenProviderTests
         AssertSafe(error);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task LocalLibraryStillWorksWhenProviderIsUnconfigured()
     {

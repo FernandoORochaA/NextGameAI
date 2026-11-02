@@ -31,6 +31,7 @@ public sealed class CatalogMetadataTests
         public void Dispose() { Db.Dispose(); Connection.Dispose(); }
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(CatalogTaxonomyKind.Genre)] [InlineData(CatalogTaxonomyKind.Theme)]
     [InlineData(CatalogTaxonomyKind.GameMode)] [InlineData(CatalogTaxonomyKind.PlayerPerspective)]
@@ -53,6 +54,7 @@ public sealed class CatalogMetadataTests
         Assert.Equal(new long?[] { 974, 132181 }, await f.Db.Games.OrderBy(g => g.Id).Select(g => g.IgdbId).ToArrayAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task KindScopesExternalIdsAndNamesAreNotIdentity()
     {
@@ -66,6 +68,7 @@ public sealed class CatalogMetadataTests
         await Assert.ThrowsAsync<DbUpdateException>(() => f.Db.SaveChangesAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task DuplicateAssociationsAndOrphansAreRejectedBySqlite()
     {
@@ -78,6 +81,7 @@ public sealed class CatalogMetadataTests
             $"INSERT INTO GameTaxonomies(GameId,CatalogTaxonomyId) VALUES({game.Id},999999)"));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task ManualGamesNeedNoMetadataAndDurationCanBeUnknown()
     {
@@ -92,6 +96,7 @@ public sealed class CatalogMetadataTests
         Assert.Equal(2, await f.Db.Games.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task DurationKeepsSecondsCountAndProvenanceOnCorrectVersion()
     {
@@ -106,6 +111,7 @@ public sealed class CatalogMetadataTests
         Assert.False(await f.Db.GameTimeToBeats.AnyAsync(t => t.GameId == original.Id));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task MultiplayerIsExternalPerPlatformAndNullIsNotFalse()
     {
@@ -125,6 +131,7 @@ public sealed class CatalogMetadataTests
         Assert.Equal(6, await f.Db.Platforms.CountAsync()); // Existing personal references are untouched.
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(true)] [InlineData(false)]
     public async Task MultiplayerRejectsDuplicateKnownOrUnknownPlatforms(bool known)
@@ -137,6 +144,7 @@ public sealed class CatalogMetadataTests
         await Assert.ThrowsAsync<DbUpdateException>(() => f.Db.SaveChangesAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task StateSeparatesNeverQueriedSuccessfulEmptyAndFailedAttempts()
     {
@@ -160,6 +168,7 @@ public sealed class CatalogMetadataTests
         Assert.Equal(2, await f.Db.GameEnrichmentStates.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("INSERT INTO CatalogTaxonomies(Kind,IgdbId,Name) VALUES(9,1,'x')")]
     [InlineData("INSERT INTO CatalogTaxonomies(Kind,IgdbId,Name) VALUES(0,0,'x')")]
@@ -173,6 +182,7 @@ public sealed class CatalogMetadataTests
         await Assert.ThrowsAsync<SqliteException>(() => f.Db.Database.ExecuteSqlRawAsync(sql));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task ReferenceDeletionIsRestrictedAndNeverCascadesToPersonalData()
     {
@@ -189,6 +199,7 @@ public sealed class CatalogMetadataTests
         Assert.Equal(LibraryStatus.Playing, entry.Status); Assert.Single(await f.Db.GameOwnerships.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void DesignTimeCannotSelectPersonalConnectionAndSnapshotMatches()
     {
@@ -210,6 +221,7 @@ public sealed class CatalogMetadataTests
         return JsonSerializer.Serialize(rows);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task MigrationOnlyCreatesNewTablesAndPreservesEveryOldRowAndForeignKey()
     {

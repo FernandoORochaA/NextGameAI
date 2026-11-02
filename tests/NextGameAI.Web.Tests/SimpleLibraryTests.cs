@@ -27,6 +27,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Title = "Jogo simples", SelectedPlatforms = platforms.ToList()
     };
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CreatesAllGroupsWithoutInventingCommercialOwnershipOrConsoleGeneration()
     {
@@ -43,6 +44,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.False(db.Database.HasPendingModelChanges());
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(null)] [InlineData(0)] [InlineData(1)] [InlineData(7)] [InlineData(10)]
     public async Task SavesAndEditsUnratedZeroAndHalfStars(int? rating)
@@ -56,6 +58,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Equal(rating, (await db.LibraryEntries.FindAsync(id))!.Rating);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("missing")] [InlineData("duplicate")] [InlineData("unknown")]
     [InlineData("rating-negative")] [InlineData("rating-overflow")] [InlineData("status")]
@@ -82,6 +85,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Equal(6, await db.Platforms.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task EditRequiresConfirmationForOmittedGroupsAndPreservesMaintainedDetails()
     {
@@ -114,6 +118,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.DoesNotContain(entry.Ownerships, x => x.Platform.Code == "playstation");
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RepeatedEditsDoNotDuplicateReferencesOrOwnerships()
     {
@@ -128,6 +133,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Single(await db.Games.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task UnknownLegacyPlatformIsPreservedUnderOther()
     {
@@ -146,6 +152,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.False(await db.Stores.AnyAsync(x => x.Code == "unspecified"));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task ClearsAbandonmentReasonWithoutTouchingPossessions()
     {
@@ -158,6 +165,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Equal(ownershipId, (await db.GameOwnerships.SingleAsync()).Id);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task FailureRollsBackGenericReferencesAndNewGame()
     {
@@ -169,6 +177,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Equal(6, await db.Platforms.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task FailedEditPreservesLegacyDataAndDoesNotLeaveNewReferences()
     {
@@ -187,6 +196,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Equal(6, await db.Platforms.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task EqualTitlesAreNotAutomaticallyMerged()
     {
@@ -196,6 +206,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Equal(2, await db.LibraryEntries.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("pc", 2)]
     [InlineData("playstation", 2)]
@@ -258,6 +269,7 @@ public sealed class SimpleLibraryTests : IDisposable
             Assert.True(await db.GameOwnerships.AnyAsync(x => x.Id == old.Id && x.LibraryEntryId == old.LibraryEntryId && x.StoreId == old.StoreId && x.PlatformId == old.PlatformId));
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("empty")] [InlineData("unknown")] [InlineData("duplicate")]
     [InlineData("unconfirmed")] [InlineData("extra-confirmation")]
@@ -282,6 +294,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Null((await db.LibraryEntries.FindAsync(id))!.Rating);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task DatabaseFailureRollsBackRemovalAdditionAndPersonalChangesTogether()
     {
@@ -304,6 +317,7 @@ public sealed class SimpleLibraryTests : IDisposable
         Assert.Equal(6, await db.Platforms.CountAsync());
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("pc", "pc")] [InlineData("ps4", "playstation")] [InlineData("ps5", "playstation")]
     [InlineData("switch", "nintendo")] [InlineData("xbox-one", "xbox")] [InlineData("xbox-series", "xbox")]

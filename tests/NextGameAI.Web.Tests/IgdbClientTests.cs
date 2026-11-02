@@ -87,7 +87,7 @@ public sealed class IgdbClientTests
             http = new HttpClient(Handler) { Timeout = Timeout.InfiniteTimeSpan };
             Cache = new(Time); Scheduler = new(Time); Client = CreateClient();
         }
-        public IgdbClient CreateClient() => new(http, Tokens, Microsoft.Extensions.Options.Options.Create(Options), Cache, Scheduler, Time);
+        public IgdbClient CreateClient() => new(new IgdbApiTransport(http, Tokens, Microsoft.Extensions.Options.Options.Create(Options), Scheduler, Time), Cache);
         public void Dispose() { http.Dispose(); Cache.Dispose(); Scheduler.Dispose(); }
     }
 
@@ -99,6 +99,7 @@ public sealed class IgdbClientTests
         Assert.Null(error.InnerException);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task SearchRanksThirtyCandidatesBeforeLimitingAndCachesRankedResults()
     {
@@ -119,6 +120,7 @@ public sealed class IgdbClientTests
         Assert.Equal(1, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task SelectedRankedIdentityIsPreservedByGetById()
     {
@@ -135,6 +137,7 @@ public sealed class IgdbClientTests
         Assert.Equal(2, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(0, "Main Game")]
     [InlineData(8, "Remake")]
@@ -149,6 +152,7 @@ public sealed class IgdbClientTests
         Assert.Equal(type, game.GameType);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task MixedMainGameRemakeAndRemasterKeepDistinctIdsAndAreCached()
     {
@@ -167,6 +171,7 @@ public sealed class IgdbClientTests
         Assert.Equal(1, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(0, 0, null)]
     [InlineData(-1, 0, null)]
@@ -181,6 +186,7 @@ public sealed class IgdbClientTests
         Assert.False(fixture.Cache.TryGet("search:RESIDENT EVIL 4", out _));
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("null")]
     [InlineData("{}")]
@@ -192,6 +198,7 @@ public sealed class IgdbClientTests
         Assert.Null(game.GameTypeId);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task GetsMainGameWithZeroTypeId()
     {
@@ -204,6 +211,7 @@ public sealed class IgdbClientTests
         Assert.Equal("Main Game", game.GameType);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task InvalidResponseDoesNotCachePartialResultsOrPreventSuccessfulRetry()
     {
@@ -220,6 +228,7 @@ public sealed class IgdbClientTests
         Assert.Equal(2, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task UsesPostHeadersAndOnlyRequiredFieldsAndMapsMetadata()
     {
@@ -252,6 +261,7 @@ public sealed class IgdbClientTests
         Assert.Equal(100, game.VersionParentIgdbId);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(null)] [InlineData("")] [InlineData("  ")] [InlineData("ab")]
     [InlineData("abc\nxyz")] [InlineData("abc\0xyz")] [InlineData("abc\u2028xyz")]
@@ -264,6 +274,7 @@ public sealed class IgdbClientTests
         Assert.Equal(0, fixture.Handler.Calls); Assert.Equal(0, fixture.Tokens.Gets);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RejectsOversizedTerms()
     {
@@ -273,6 +284,7 @@ public sealed class IgdbClientTests
         Assert.Equal(0, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("Ação e aventura")]
     [InlineData("Halo \"Collection\"")]
@@ -299,6 +311,7 @@ public sealed class IgdbClientTests
         await fixture.Client.SearchAsync(term);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task PreservesApiOrderAndDistinctVersionsWithSameTitleAndCapsAtTen()
     {
@@ -313,6 +326,7 @@ public sealed class IgdbClientTests
         Assert.Equal("Gold", results[2].EditionTitle);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task AllowsMissingOptionalFieldsAndDeduplicatesOnlyIdenticalIds()
     {
@@ -322,6 +336,7 @@ public sealed class IgdbClientTests
         Assert.All(results, game => { Assert.Null(game.CoverImageId); Assert.Null(game.FirstReleaseDate); Assert.Null(game.GameType); Assert.Null(game.EditionTitle); });
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task EmptySearchAndAbsentIdAreValidAndCached()
     {
@@ -333,6 +348,7 @@ public sealed class IgdbClientTests
         Assert.Equal(2, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task GetsSpecificIdWithNumericQuery()
     {
@@ -346,6 +362,7 @@ public sealed class IgdbClientTests
         Assert.Equal(123, (await fixture.Client.GetByIdAsync(123))!.IgdbId);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(0)] [InlineData(-1)]
     public async Task RejectsInvalidIdWithoutNetwork(long id)
@@ -355,6 +372,7 @@ public sealed class IgdbClientTests
         Assert.Equal(0, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RejectsWrongIdFromApi()
     {
@@ -363,6 +381,7 @@ public sealed class IgdbClientTests
         Assert.Equal(IgdbQueryFailure.InvalidResponse, error.Failure);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("{}")] [InlineData("null")] [InlineData("invalid")]
     [InlineData("[null]")] [InlineData("[{}]")]
@@ -378,6 +397,7 @@ public sealed class IgdbClientTests
         Assert.Equal(IgdbQueryFailure.InvalidResponse, error.Failure); Safe(error);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task LimitsResponseBytesAndTextLengths()
     {
@@ -389,6 +409,7 @@ public sealed class IgdbClientTests
         }
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task UnauthorizedInvalidatesRejectedTokenAndRetriesOnlyOnce()
     {
@@ -402,6 +423,7 @@ public sealed class IgdbClientTests
         Assert.Equal(2, denied.Handler.Calls); Assert.Equal(2, denied.Tokens.Invalidated.Count);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RateLimitWaitsForRetryAfterAndRetriesOnce()
     {
@@ -418,6 +440,7 @@ public sealed class IgdbClientTests
         Assert.Equal(2, calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task LongRetryAfterBlocksFollowingCallsWithoutSleepingIndefinitely()
     {
@@ -436,6 +459,7 @@ public sealed class IgdbClientTests
         Assert.Equal(1, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RepeatedRateLimitHasFiniteAttempts()
     {
@@ -445,6 +469,7 @@ public sealed class IgdbClientTests
         Assert.Equal(2, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(400)] [InlineData(403)] [InlineData(500)] [InlineData(503)] [InlineData(302)]
     public async Task HttpErrorsAreNotEmptyResultsAndAreNotCached(int status)
@@ -458,6 +483,7 @@ public sealed class IgdbClientTests
         Assert.Equal(2, calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CacheNormalizesKeysIsSharedAndExpiresAfterFiveMinutes()
     {
@@ -470,6 +496,7 @@ public sealed class IgdbClientTests
         Assert.Equal(2, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void CacheIsBoundedAndContainsOnlyTypedResults()
     {
@@ -479,6 +506,7 @@ public sealed class IgdbClientTests
         Assert.InRange(stored, 1, 100);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task SharedSchedulerSpacesCallsAndAllowsOnlyOneActiveRequest()
     {
@@ -500,6 +528,7 @@ public sealed class IgdbClientTests
         }
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task TimeoutAndTransportErrorsAreSafe()
     {
@@ -511,6 +540,7 @@ public sealed class IgdbClientTests
         Assert.Equal(IgdbQueryFailure.Unavailable, networkError.Failure); Safe(networkError);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RealPerAttemptTimeoutIsEnforced()
     {
@@ -520,6 +550,7 @@ public sealed class IgdbClientTests
         Assert.Equal(IgdbQueryFailure.Timeout, error.Failure);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CancellationBeforeAndDuringRequestIsPropagated()
     {
@@ -534,6 +565,7 @@ public sealed class IgdbClientTests
         Safe(await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task));
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData("disabled")] [InlineData("missing")]
     public async Task UnconfiguredIntegrationNeverCallsNetwork(string condition)
@@ -545,11 +577,13 @@ public sealed class IgdbClientTests
         Safe(error); Assert.Equal(0, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(null)] [InlineData("")] [InlineData("https://evil.example/image")]
     [InlineData("../image")] [InlineData("a?secret=value")]
     public void InvalidCoverIdsUseNoUrl(string? imageId) => Assert.Null(IgdbCoverImages.GetUrl(imageId));
 
+    [Trait("Host", "None")]
     [Fact]
     public void BuildsOnlyDocumentedCdnSizes()
     {
@@ -558,18 +592,91 @@ public sealed class IgdbClientTests
         Assert.Throws<ArgumentOutOfRangeException>(() => IgdbCoverImages.GetUrl("co_test", (IgdbCoverSize)99));
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public void RegistrationKeepsAuthenticationSingleAndSharesCacheAndScheduler()
     {
         var configuration = new ConfigurationBuilder().Build();
         var services = new ServiceCollection().AddLogging().AddIgdbAuthentication(configuration).AddIgdbSearch();
         Assert.Single(services, x => x.ServiceType == typeof(IIgdbTokenProvider));
+        Assert.Single(services, x => x.ServiceType == typeof(IgdbRequestScheduler));
+        Assert.Single(services, x => x.ServiceType == typeof(IgdbApiTransport));
         using var root = services.BuildServiceProvider(validateScopes: true); using var scope = root.CreateScope();
         Assert.NotSame(root.GetRequiredService<IIgdbClient>(), scope.ServiceProvider.GetRequiredService<IIgdbClient>());
         Assert.Same(root.GetRequiredService<IgdbQueryCache>(), scope.ServiceProvider.GetRequiredService<IgdbQueryCache>());
         Assert.Same(root.GetRequiredService<IgdbRequestScheduler>(), scope.ServiceProvider.GetRequiredService<IgdbRequestScheduler>());
     }
 
+    [Trait("Host", "None")]
+    [Theory]
+    [InlineData("https://example.com/games")]
+    [InlineData("//example.com")]
+    [InlineData("../games")]
+    [InlineData("games?secret=value")]
+    [InlineData("games#fragment")]
+    [InlineData("games/other")]
+    [InlineData("")]
+    public async Task TransportRejectsNonResourceEndpointsBeforeAuthentication(string endpoint)
+    {
+        using var fixture = new Fixture();
+        using var http = new HttpClient(fixture.Handler, disposeHandler: false);
+        var transport = new IgdbApiTransport(http, fixture.Tokens, Options.Create(fixture.Options), fixture.Scheduler, fixture.Time);
+        var error = await Assert.ThrowsAsync<IgdbQueryException>(() =>
+            transport.SendAsync(endpoint, "fields id;", bytes => Encoding.UTF8.GetString(bytes), CancellationToken.None));
+        Assert.Equal(IgdbQueryFailure.InvalidInput, error.Failure);
+        Assert.Equal(0, fixture.Tokens.Gets);
+        Assert.Equal(0, fixture.Handler.Calls);
+        Safe(error);
+    }
+
+    [Trait("Host", "None")]
+    [Fact]
+    public async Task TransportConsumersShareSchedulerAcrossResourceEndpoints()
+    {
+        var starts = new List<long>(); var paths = new List<string>(); var active = 0; var maximum = 0;
+        Fixture? fixture = null;
+        fixture = new Fixture(async (request, ct) =>
+        {
+            maximum = Math.Max(maximum, Interlocked.Increment(ref active));
+            starts.Add(fixture!.Time.GetTimestamp());
+            paths.Add(request.RequestUri!.AbsolutePath);
+            Assert.Equal("api.igdb.com", request.RequestUri.Host);
+            Assert.Equal("https", request.RequestUri.Scheme);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("fields id;", await request.Content!.ReadAsStringAsync(ct));
+            await Task.Yield();
+            Interlocked.Decrement(ref active);
+            return Json("[]");
+        });
+        using (fixture)
+        using (var http = new HttpClient(fixture.Handler, disposeHandler: false))
+        {
+            IgdbApiTransport Create() => new(http, fixture.Tokens, Options.Create(fixture.Options), fixture.Scheduler, fixture.Time);
+            await Task.WhenAll(Create().SendAsync("games", "fields id;", Encoding.UTF8.GetString, CancellationToken.None),
+                Create().SendAsync("genres", "fields id;", Encoding.UTF8.GetString, CancellationToken.None));
+            Assert.Equal(1, maximum);
+            Assert.Equal(new[] { "/v4/games", "/v4/genres" }, paths);
+            Assert.True(starts[1] - starts[0] >= IgdbRequestScheduler.MinimumSpacing.Ticks);
+        }
+    }
+
+    [Trait("Host", "None")]
+    [Fact]
+    public async Task SeparateRegisteredClientsUseSameTransportHttpConfiguration()
+    {
+        using var handler = new Handler((_, _) => Task.FromResult(Json()));
+        var services = new ServiceCollection().AddLogging()
+            .AddIgdbAuthentication(new ConfigurationBuilder().Build()).AddIgdbSearch();
+        services.Configure<IgdbOptions>(o => { o.ClientId = FakeClientId; o.ClientSecret = FakeSecret; });
+        services.AddSingleton<IIgdbTokenProvider>(new TokenProvider());
+        services.AddHttpClient<IgdbApiTransport>().ConfigurePrimaryHttpMessageHandler(() => handler);
+        using var root = services.BuildServiceProvider(validateScopes: true);
+        Assert.Single(await root.GetRequiredService<IIgdbClient>().SearchAsync("Jogo"));
+        Assert.Single(await root.GetRequiredService<IIgdbClient>().SearchAsync("Jogo"));
+        Assert.Equal(1, handler.Calls);
+    }
+
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task SearchDoesNotWriteToLocalLibrary()
     {
@@ -579,7 +686,7 @@ public sealed class IgdbClientTests
         {
             services.Configure<IgdbOptions>(options => { options.Enabled = true; options.ClientId = FakeClientId; options.ClientSecret = FakeSecret; });
             services.RemoveAll<IIgdbTokenProvider>(); services.AddSingleton<IIgdbTokenProvider>(new TokenProvider());
-            services.AddHttpClient<IIgdbClient, IgdbClient>().ConfigurePrimaryHttpMessageHandler(() => handler);
+            services.AddSimulatedHttp(nameof(IgdbApiTransport), () => handler);
         }));
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<NextGameAiDbContext>();
@@ -602,6 +709,7 @@ public sealed class IgdbClientTests
         }
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task RealTokenProviderIsReusedAndConditionallyRenewedWithSimulatedHttp(bool rejectFirst)
@@ -612,13 +720,14 @@ public sealed class IgdbClientTests
         { access_token = $"synthetic-token-{++authentications}", expires_in = 3600, token_type = "bearer" }))));
         using var provider = new IgdbTokenProvider(new AuthFactory(authHandler), Options.Create(fixture.Options), fixture.Time);
         using var http = new HttpClient(fixture.Handler, disposeHandler: false);
-        var client = new IgdbClient(http, provider, Options.Create(fixture.Options), fixture.Cache, fixture.Scheduler, fixture.Time);
+        var client = new IgdbClient(new IgdbApiTransport(http, provider, Options.Create(fixture.Options), fixture.Scheduler, fixture.Time), fixture.Cache);
         await client.SearchAsync("Jogo primeiro");
         await client.SearchAsync("Jogo segundo");
         Assert.Equal(rejectFirst ? 2 : 1, authHandler.Calls);
         Assert.Equal(rejectFirst ? 3 : 2, apiCalls);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task RateLimitAcceptsHttpDateAndCombinedRetriesRemainBounded()
     {
@@ -643,6 +752,7 @@ public sealed class IgdbClientTests
         }
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task EnforcesStreamingSizeLimitWhenContentLengthIsIncorrect()
     {
@@ -656,6 +766,7 @@ public sealed class IgdbClientTests
         Assert.Equal(IgdbQueryFailure.InvalidResponse, error.Failure);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task EmptyOptionalStringsAreTreatedAsMissing()
     {
@@ -664,6 +775,7 @@ public sealed class IgdbClientTests
         Assert.Null(game.CoverImageId); Assert.Null(game.GameType); Assert.Null(game.EditionTitle);
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task CancelingQueuedRequestNeverSendsIt()
     {
@@ -680,6 +792,7 @@ public sealed class IgdbClientTests
         Assert.Equal(1, fixture.Handler.Calls);
     }
 
+    [Trait("Host", "None")]
     [Theory]
     [InlineData(0)] [InlineData(61)]
     public async Task InvalidTimeoutIsRejectedWithoutNetwork(int timeout)

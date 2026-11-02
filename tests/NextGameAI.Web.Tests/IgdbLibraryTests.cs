@@ -82,7 +82,7 @@ public sealed class IgdbLibraryTests
             {
                 s.RemoveAll<IIgdbTokenProvider>(); s.AddSingleton<IIgdbTokenProvider>(new Tokens());
                 s.Configure<NextGameAI.Web.Configuration.IgdbOptions>(o => { o.ClientId = "synthetic"; o.ClientSecret = "synthetic"; });
-                s.AddHttpClient<IIgdbClient, IgdbClient>().ConfigurePrimaryHttpMessageHandler(() => HttpIgdb);
+                s.AddSimulatedHttp(nameof(IgdbApiTransport), () => HttpIgdb);
                 s.AddDbContext<NextGameAiDbContext>(o => o.AddInterceptors(AccessFailure));
             }));
             Http = app.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
@@ -102,6 +102,7 @@ public sealed class IgdbLibraryTests
         public void Dispose() { Http.Dispose(); app.Dispose(); original.Dispose(); }
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task SelectionOpensCorrectFormAndDoesNotPersist()
     {
@@ -115,6 +116,7 @@ public sealed class IgdbLibraryTests
         Assert.Empty(await scope.ServiceProvider.GetRequiredService<NextGameAiDbContext>().Games.ToListAsync());
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData(5)] [InlineData(6)] [InlineData(8)] [InlineData(10)] [InlineData(13)] [InlineData(14)]
     public async Task ExpectedSqliteReadFailureShowsFriendlyGetAndPreservesPostWithoutWrites(int code)
@@ -149,6 +151,7 @@ public sealed class IgdbLibraryTests
         Assert.Equal(0, f.HttpIgdb.Calls);
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task ExpectedSqliteWriteFailureUsesSameMessageAndRollsBack(bool external)
@@ -169,6 +172,7 @@ public sealed class IgdbLibraryTests
         Assert.False(await db.Stores.AnyAsync(s => s.Code == "unspecified"));
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task UnexpectedPreparationErrorsAreNotHidden(bool programmingError)
@@ -185,6 +189,7 @@ public sealed class IgdbLibraryTests
             await Assert.ThrowsAsync<SqliteException>(() => controller.Create(974, CancellationToken.None));
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task UnexpectedWriteErrorsAreNotPresentedAsExpectedValidationFailures(bool programmingError)
@@ -201,6 +206,7 @@ public sealed class IgdbLibraryTests
         Assert.Empty(await db.Games.ToListAsync()); Assert.Empty(await db.LibraryEntries.ToListAsync());
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task SavesTrustedMetadataAndPersonalDataWithMultiplePlatforms()
     {
@@ -224,6 +230,7 @@ public sealed class IgdbLibraryTests
         Assert.Contains("co_test.jpg", await f.Http.GetStringAsync("/Library"));
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("")] [InlineData("0")] [InlineData("1")] [InlineData("10")]
     public async Task RatingKeepsUnratedZeroAndHalfStars(string rating)
@@ -235,6 +242,7 @@ public sealed class IgdbLibraryTests
             (await scope.ServiceProvider.GetRequiredService<NextGameAiDbContext>().LibraryEntries.SingleAsync()).Rating);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task LocalIdentityIsReusedWithoutExternalCallsAndSurvivesDeletion()
     {
@@ -257,6 +265,7 @@ public sealed class IgdbLibraryTests
         Assert.Equal(1, await dbCheck.Games.CountAsync()); Assert.Equal(0, f.HttpIgdb.Calls);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task DuplicateOffersDetailsAndEditWithoutMutatingExistingEntry()
     {
@@ -274,6 +283,7 @@ public sealed class IgdbLibraryTests
         Assert.Equal("Minhas notas", (await db.LibraryEntries.SingleAsync()).Notes);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task OriginalRemakeAndOldManualTitleRemainIndependent()
     {
@@ -293,6 +303,7 @@ public sealed class IgdbLibraryTests
         Assert.Equal(1, await db.Games.CountAsync(g => g.IgdbId == 132181));
     }
 
+    [Trait("Host", "Mvc")]
     [Theory]
     [InlineData("0")] [InlineData("-1")] [InlineData("abc")] [InlineData("")] [InlineData("999")]
     public async Task InvalidOrAbsentExternalIdentityNeverBecomesManual(string id)
@@ -307,6 +318,7 @@ public sealed class IgdbLibraryTests
         Assert.Empty(await db.Games.ToListAsync()); Assert.Empty(await db.LibraryEntries.ToListAsync());
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task OutagePreservesInputAndManualRegistrationStillWorks()
     {
@@ -322,6 +334,7 @@ public sealed class IgdbLibraryTests
         Assert.Null((await scope.ServiceProvider.GetRequiredService<NextGameAiDbContext>().Games.SingleAsync()).IgdbId);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task MissingPlatformsAndAntiforgeryCannotPersist()
     {
@@ -334,6 +347,7 @@ public sealed class IgdbLibraryTests
         Assert.Empty(await scope.ServiceProvider.GetRequiredService<NextGameAiDbContext>().Games.ToListAsync());
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task FailedEntryInsertRollsBackCatalogAndNewReferences()
     {
@@ -348,6 +362,7 @@ public sealed class IgdbLibraryTests
         Assert.False(await db.Platforms.AnyAsync(p => p.Code == "playstation"));
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task IdentityInsertedWhileIgdbRespondsIsRecheckedInsideTransaction()
     {
@@ -367,6 +382,7 @@ public sealed class IgdbLibraryTests
         Assert.Single(await context.Games.ToListAsync());
     }
 
+    [Trait("Host", "None")]
     [Fact]
     public async Task AdditiveMigrationPreservesOldSqliteRowsAndRelations()
     {
@@ -389,6 +405,7 @@ public sealed class IgdbLibraryTests
         Assert.DoesNotContain("CREATE TABLE \"ef_temp", sql);
     }
 
+    [Trait("Host", "Mvc")]
     [Fact]
     public async Task EditingAndDeletingIgdbEntryPreserveCatalogAndOtherGames()
     {
