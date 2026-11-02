@@ -6,6 +6,7 @@ namespace NextGameAI.Web.Services;
 public interface IGameEnrichmentService
 {
     Task<GameEnrichmentResult> EnrichTaxonomiesAsync(int gameId, CancellationToken cancellationToken = default);
+    Task<GameEnrichmentResult> EnrichDurationAndMultiplayerAsync(int gameId, CancellationToken cancellationToken = default);
 }
 
 public enum GameEnrichmentOutcome

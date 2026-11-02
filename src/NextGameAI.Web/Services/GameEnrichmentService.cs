@@ -8,10 +8,16 @@ using NextGameAI.Web.Services.Igdb;
 namespace NextGameAI.Web.Services;
 
 // Inert until explicitly called. Sequential idempotence only; coordination belongs to 4B.5.
-public sealed class GameEnrichmentService(IServiceScopeFactory scopes, IIgdbMetadataClient metadata,
+public sealed partial class GameEnrichmentService(IServiceScopeFactory scopes, IIgdbMetadataClient metadata,
     TimeProvider clock) : IGameEnrichmentService
 {
-    public async Task<GameEnrichmentResult> EnrichTaxonomiesAsync(int gameId, CancellationToken cancellationToken = default)
+    public Task<GameEnrichmentResult> EnrichTaxonomiesAsync(int gameId, CancellationToken cancellationToken = default) =>
+        EnrichCoreAsync(gameId, false, cancellationToken);
+
+    public Task<GameEnrichmentResult> EnrichDurationAndMultiplayerAsync(int gameId, CancellationToken cancellationToken = default) =>
+        EnrichCoreAsync(gameId, true, cancellationToken);
+
+    private async Task<GameEnrichmentResult> EnrichCoreAsync(int gameId, bool details, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         try
@@ -32,24 +38,35 @@ public sealed class GameEnrichmentService(IServiceScopeFactory scopes, IIgdbMeta
             try { external = await metadata.GetByIdAsync(igdbId.Value, cancellationToken); }
             catch (IgdbQueryException error) { external = Failed(igdbId.Value, error); }
             if (external.IgdbId != igdbId) return Result(GameEnrichmentOutcome.IdentityMismatch);
-            var plans = new[]
+            var plans = details ? new[] { PrepareTime(external.TimeToBeat, igdbId.Value), PrepareMultiplayer(external.Multiplayer, igdbId.Value) } : new[]
             {
                 Prepare(CatalogMetadataSection.Genres, CatalogTaxonomyKind.Genre, IgdbTaxonomyKind.Genre, external.Genres),
                 Prepare(CatalogMetadataSection.Themes, CatalogTaxonomyKind.Theme, IgdbTaxonomyKind.Theme, external.Themes),
                 Prepare(CatalogMetadataSection.GameModes, CatalogTaxonomyKind.GameMode, IgdbTaxonomyKind.GameMode, external.GameModes),
                 Prepare(CatalogMetadataSection.PlayerPerspectives, CatalogTaxonomyKind.PlayerPerspective, IgdbTaxonomyKind.PlayerPerspective, external.PlayerPerspectives),
                 Prepare(CatalogMetadataSection.Keywords, CatalogTaxonomyKind.Keyword, IgdbTaxonomyKind.Keyword, external.Keywords)
-            };
+            }.Select(plan => new Work(plan.Result, async (db, id, ct) =>
+            {
+                await Synchronize(db, id, plan, ct);
+                return true;
+            })).ToArray();
             var now = clock.GetUtcNow().UtcDateTime;
             using var writeScope = scopes.CreateScope();
             var write = writeScope.ServiceProvider.GetRequiredService<NextGameAiDbContext>();
             await using var transaction = await write.Database.BeginTransactionAsync(cancellationToken);
             if (!await Matches(write, gameId, igdbId.Value, cancellationToken))
                 return Result(GameEnrichmentOutcome.IdentityMismatch);
-            foreach (var plan in plans)
+            for (var index = 0; index < plans.Length; index++)
             {
+                var plan = plans[index];
                 if (plan.Result.Outcome == TaxonomyEnrichmentOutcome.Applied)
-                    await Synchronize(write, gameId, plan, cancellationToken);
+                {
+                    if (!await plan.Persist!(write, gameId, cancellationToken))
+                    {
+                        plan = plan with { Result = plan.Result with { Outcome = TaxonomyEnrichmentOutcome.InvalidResponse } };
+                        plans[index] = plan;
+                    }
+                }
                 var state = await write.GameEnrichmentStates.SingleOrDefaultAsync(
                     s => s.GameId == gameId && s.Section == plan.Result.Section, cancellationToken);
                 // Never fabricate timestamps or violate a newer persisted state when the clock moves back.
@@ -75,7 +92,7 @@ public sealed class GameEnrichmentService(IServiceScopeFactory scopes, IIgdbMeta
                 return Result(GameEnrichmentOutcome.IdentityMismatch);
             await transaction.CommitAsync(cancellationToken);
             var applied = plans.Count(p => p.Result.Outcome == TaxonomyEnrichmentOutcome.Applied);
-            return new(applied == 5 ? GameEnrichmentOutcome.Applied : applied > 0
+            return new(applied == plans.Length ? GameEnrichmentOutcome.Applied : applied > 0
                 ? GameEnrichmentOutcome.Partial : GameEnrichmentOutcome.Preserved,
                 Array.AsReadOnly(plans.Select(p => p.Result).ToArray()));
         }
@@ -142,6 +159,8 @@ public sealed class GameEnrichmentService(IServiceScopeFactory scopes, IIgdbMeta
 
     private static GameEnrichmentResult Result(GameEnrichmentOutcome outcome) => new(outcome, Array.Empty<TaxonomyEnrichmentResult>());
     private sealed record Plan(CatalogTaxonomyKind Kind, IgdbTaxonomyResult[] Rows, TaxonomyEnrichmentResult Result);
+    private sealed record Work(TaxonomyEnrichmentResult Result,
+        Func<NextGameAiDbContext, int, CancellationToken, Task<bool>>? Persist = null);
 
     private static IgdbMetadataResult Failed(long id, IgdbQueryException error)
     {
