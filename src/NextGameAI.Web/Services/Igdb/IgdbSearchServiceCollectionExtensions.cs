@@ -10,6 +10,7 @@ public static class IgdbSearchServiceCollectionExtensions
         services.AddSingleton<IgdbQueryCache>();
         services.AddSingleton<IgdbRequestScheduler>();
         services.AddTransient<IIgdbClient, IgdbClient>();
+        services.AddTransient<IIgdbMetadataClient, IgdbMetadataClient>();
         services.AddHttpClient<IgdbApiTransport>(client =>
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
