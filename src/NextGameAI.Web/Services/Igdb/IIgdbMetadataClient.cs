@@ -4,4 +4,6 @@ public interface IIgdbMetadataClient
 {
     // Invalid input throws IgdbQueryException; caller cancellation propagates OperationCanceledException.
     Task<IgdbMetadataResult> GetByIdAsync(long igdbId, CancellationToken cancellationToken = default);
+    Task<IgdbMetadataResult> GetSectionsAsync(long igdbId, IReadOnlyCollection<IgdbMetadataSectionKind> sections,
+        CancellationToken cancellationToken = default);
 }

@@ -7,6 +7,7 @@ public static class IgdbSearchServiceCollectionExtensions
     public static IServiceCollection AddIgdbSearch(this IServiceCollection services)
     {
         services.TryAddSingleton<TimeProvider>(TimeProvider.System);
+        services.TryAddSingleton<GameEnrichmentPolicy>();
         services.AddSingleton<IgdbQueryCache>();
         services.AddSingleton<IgdbRequestScheduler>();
         services.AddTransient<IIgdbClient, IgdbClient>();

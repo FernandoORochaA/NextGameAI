@@ -50,6 +50,8 @@ public sealed partial class GameEnrichmentService(IServiceScopeFactory scopes, I
                 await Synchronize(db, id, plan, ct);
                 return true;
             })).ToArray();
+            plans = plans.Where(p => p.Result.ExternalStatus != IgdbMetadataStatus.NotRequested).ToArray();
+            if (plans.Length == 0) return Result(GameEnrichmentOutcome.Preserved);
             var now = clock.GetUtcNow().UtcDateTime;
             using var writeScope = scopes.CreateScope();
             var write = writeScope.ServiceProvider.GetRequiredService<NextGameAiDbContext>();

@@ -24,6 +24,8 @@ public sealed class GameEnrichmentServiceTests
         public int Calls;
         public Func<long, IgdbMetadataResult> Response = Good;
         public Action? Before;
+        public Task<IgdbMetadataResult> GetSectionsAsync(long id, IReadOnlyCollection<IgdbMetadataSectionKind> sections, CancellationToken ct = default) =>
+            throw new InvalidOperationException("Existing persistence still uses the complete query.");
         public Task<IgdbMetadataResult> GetByIdAsync(long id, CancellationToken ct = default)
         {
             Calls++; ct.ThrowIfCancellationRequested(); Before?.Invoke();
@@ -265,4 +267,33 @@ public sealed class GameEnrichmentServiceTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Service.EnrichTaxonomiesAsync(id, cts.Token));
         Assert.Equal(before, await f.Snapshot("GameEnrichmentStates"));
     }
+    [Fact]
+    public async Task NotRequestedTaxonomyDoesNotChangeItsLinksOrTimestamps()
+    {
+        using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichTaxonomiesAsync(id);
+        GameEnrichmentState previous;
+        using (var db = f.Db()) previous = await db.GameEnrichmentStates.AsNoTracking().SingleAsync(s => s.Section == CatalogMetadataSection.Genres);
+        f.Clock.Now = f.Clock.Now.AddDays(1);
+        f.Metadata.Response = external => Good(external) with { Genres = new(IgdbMetadataStatus.NotRequested) };
+        var r = await f.Service.EnrichTaxonomiesAsync(id);
+        Assert.DoesNotContain(r.Sections, s => s.Section == CatalogMetadataSection.Genres);
+        using var read = f.Db(); var state = await read.GameEnrichmentStates.SingleAsync(s => s.Section == CatalogMetadataSection.Genres);
+        Assert.Equal(previous.LastAttemptAtUtc, state.LastAttemptAtUtc); Assert.Equal(previous.LastSuccessAtUtc, state.LastSuccessAtUtc);
+        Assert.Equal(CatalogUpdateResult.Success, state.LastResult);
+        Assert.True(await read.GameTaxonomies.AnyAsync(l => l.CatalogTaxonomy.Kind == CatalogTaxonomyKind.Genre && l.CatalogTaxonomy.IgdbId == 10));
+    }
+
+    [Fact]
+    public async Task EntirelyNotRequestedTaxonomiesNeverCreateOrUpdateStates()
+    {
+        using var f = new Fixture(); var id = await f.Game();
+        f.Metadata.Response = external => Good(external) with
+        {
+            Genres = new(IgdbMetadataStatus.NotRequested), Themes = new(IgdbMetadataStatus.NotRequested),
+            GameModes = new(IgdbMetadataStatus.NotRequested), PlayerPerspectives = new(IgdbMetadataStatus.NotRequested), Keywords = new(IgdbMetadataStatus.NotRequested)
+        };
+        Assert.Equal(GameEnrichmentOutcome.Preserved, (await f.Service.EnrichTaxonomiesAsync(id)).Outcome);
+        using var db = f.Db(); Assert.Empty(await db.GameEnrichmentStates.ToArrayAsync()); Assert.Empty(await db.GameTaxonomies.ToArrayAsync());
+    }
+
 }

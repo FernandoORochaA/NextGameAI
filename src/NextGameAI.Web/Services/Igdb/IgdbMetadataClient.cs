@@ -6,18 +6,31 @@ namespace NextGameAI.Web.Services.Igdb;
 public sealed class IgdbMetadataClient(IgdbApiTransport transport) : IIgdbMetadataClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { MaxDepth = 16 };
-    private const string TaxonomyFields = "id,genres.id,genres.name,themes.id,themes.name,game_modes.id,game_modes.name,player_perspectives.id,player_perspectives.name,keywords.id,keywords.name";
+    private static readonly (IgdbMetadataSectionKind Section, string Field)[] TaxonomyFields =
+    [
+        (IgdbMetadataSectionKind.Genres, "genres"), (IgdbMetadataSectionKind.Themes, "themes"),
+        (IgdbMetadataSectionKind.GameModes, "game_modes"), (IgdbMetadataSectionKind.PlayerPerspectives, "player_perspectives"),
+        (IgdbMetadataSectionKind.Keywords, "keywords")
+    ];
     private const string MultiplayerFields = "id,game,platform.id,platform.name,campaigncoop,dropin,lancoop,offlinecoop,onlinecoop,splitscreen,splitscreenonline,offlinecoopmax,offlinemax,onlinecoopmax,onlinemax";
 
-    public async Task<IgdbMetadataResult> GetByIdAsync(long igdbId, CancellationToken cancellationToken = default)
+    public Task<IgdbMetadataResult> GetByIdAsync(long igdbId, CancellationToken cancellationToken = default) =>
+        GetSectionsAsync(igdbId, Enum.GetValues<IgdbMetadataSectionKind>(), cancellationToken);
+
+    public async Task<IgdbMetadataResult> GetSectionsAsync(long igdbId, IReadOnlyCollection<IgdbMetadataSectionKind> sections,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (igdbId <= 0) throw new IgdbQueryException(IgdbQueryFailure.InvalidInput);
+        if (sections is null || sections.Any(s => !Enum.IsDefined(s))) throw new IgdbQueryException(IgdbQueryFailure.InvalidInput);
+        var selected = sections.ToHashSet();
+        if (selected.Count == 0) return Select(Failed(igdbId, null), selected);
+        var fields = "id" + string.Concat(TaxonomyFields.Where(t => selected.Contains(t.Section)).Select(t => $",{t.Field}.id,{t.Field}.name"));
         var id = igdbId.ToString(CultureInfo.InvariantCulture);
         IgdbMetadataResponse? game;
         try
         {
-            var response = await transport.SendAsync("games", $"fields {TaxonomyFields}; where id = {id}; limit 2;", bytes =>
+            var response = await transport.SendAsync("games", $"fields {fields}; where id = {id}; limit 2;", bytes =>
             {
                 var rows = Read<IgdbMetadataResponse>(bytes);
                 if (rows.Length > 1 || rows.Any(g => g.Id != igdbId)) throw Invalid();
@@ -25,20 +38,20 @@ public sealed class IgdbMetadataClient(IgdbApiTransport transport) : IIgdbMetada
             }, cancellationToken);
             game = response.Game;
         }
-        catch (IgdbQueryException error) { return Failed(igdbId, error); }
-        if (game is null) return Failed(igdbId, null);
+        catch (IgdbQueryException error) { return Select(Failed(igdbId, error), selected); }
+        if (game is null) return Select(Failed(igdbId, null), selected);
 
-        var genres = Taxonomy(game.Genres, IgdbTaxonomyKind.Genre);
-        var themes = Taxonomy(game.Themes, IgdbTaxonomyKind.Theme);
-        var modes = Taxonomy(game.GameModes, IgdbTaxonomyKind.GameMode);
-        var perspectives = Taxonomy(game.PlayerPerspectives, IgdbTaxonomyKind.PlayerPerspective);
-        var keywords = Taxonomy(game.Keywords, IgdbTaxonomyKind.Keyword);
-        var time = await SectionAsync("game_time_to_beats",
+        var genres = selected.Contains(IgdbMetadataSectionKind.Genres) ? Taxonomy(game.Genres, IgdbTaxonomyKind.Genre) : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>();
+        var themes = selected.Contains(IgdbMetadataSectionKind.Themes) ? Taxonomy(game.Themes, IgdbTaxonomyKind.Theme) : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>();
+        var modes = selected.Contains(IgdbMetadataSectionKind.GameModes) ? Taxonomy(game.GameModes, IgdbTaxonomyKind.GameMode) : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>();
+        var perspectives = selected.Contains(IgdbMetadataSectionKind.PlayerPerspectives) ? Taxonomy(game.PlayerPerspectives, IgdbTaxonomyKind.PlayerPerspective) : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>();
+        var keywords = selected.Contains(IgdbMetadataSectionKind.Keywords) ? Taxonomy(game.Keywords, IgdbTaxonomyKind.Keyword) : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>();
+        var time = selected.Contains(IgdbMetadataSectionKind.TimeToBeat) ? await SectionAsync("game_time_to_beats",
             $"fields id,game_id,hastily,normally,completely,count; where game_id = {id}; limit 2;",
-            bytes => Time(Read<IgdbTimeToBeatResponse>(bytes), igdbId), cancellationToken);
-        var multiplayer = await SectionAsync("multiplayer_modes",
+            bytes => Time(Read<IgdbTimeToBeatResponse>(bytes), igdbId), cancellationToken) : NotRequested<IgdbTimeToBeatResult>();
+        var multiplayer = selected.Contains(IgdbMetadataSectionKind.Multiplayer) ? await SectionAsync("multiplayer_modes",
             $"fields {MultiplayerFields}; where game = {id}; limit 100;",
-            bytes => Multiplayer(Read<IgdbMultiplayerResponse>(bytes), igdbId), cancellationToken);
+            bytes => Multiplayer(Read<IgdbMultiplayerResponse>(bytes), igdbId), cancellationToken) : NotRequested<IReadOnlyList<IgdbMultiplayerResult>>();
         return new(igdbId, genres, themes, modes, perspectives, keywords, time, multiplayer);
     }
 
@@ -145,6 +158,19 @@ public sealed class IgdbMetadataClient(IgdbApiTransport transport) : IIgdbMetada
         Failure<IReadOnlyList<IgdbTaxonomyResult>>(error), Failure<IReadOnlyList<IgdbTaxonomyResult>>(error),
         Failure<IReadOnlyList<IgdbTaxonomyResult>>(error), Failure<IgdbTimeToBeatResult>(error),
         Failure<IReadOnlyList<IgdbMultiplayerResult>>(error));
+
+    private static IgdbMetadataSection<T> NotRequested<T>() where T : class => new(IgdbMetadataStatus.NotRequested);
+
+    private static IgdbMetadataResult Select(IgdbMetadataResult result, HashSet<IgdbMetadataSectionKind> selected) => result with
+    {
+        Genres = selected.Contains(IgdbMetadataSectionKind.Genres) ? result.Genres : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>(),
+        Themes = selected.Contains(IgdbMetadataSectionKind.Themes) ? result.Themes : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>(),
+        GameModes = selected.Contains(IgdbMetadataSectionKind.GameModes) ? result.GameModes : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>(),
+        PlayerPerspectives = selected.Contains(IgdbMetadataSectionKind.PlayerPerspectives) ? result.PlayerPerspectives : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>(),
+        Keywords = selected.Contains(IgdbMetadataSectionKind.Keywords) ? result.Keywords : NotRequested<IReadOnlyList<IgdbTaxonomyResult>>(),
+        TimeToBeat = selected.Contains(IgdbMetadataSectionKind.TimeToBeat) ? result.TimeToBeat : NotRequested<IgdbTimeToBeatResult>(),
+        Multiplayer = selected.Contains(IgdbMetadataSectionKind.Multiplayer) ? result.Multiplayer : NotRequested<IReadOnlyList<IgdbMultiplayerResult>>()
+    };
 
     private sealed record GameResponse(IgdbMetadataResponse? Game);
 }

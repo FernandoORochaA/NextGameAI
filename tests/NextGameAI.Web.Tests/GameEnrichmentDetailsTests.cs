@@ -23,6 +23,8 @@ public sealed class GameEnrichmentDetailsTests
         public Func<long, IgdbMetadataResult> Response = Good;
         public Action? Before;
         public int Calls;
+        public Task<IgdbMetadataResult> GetSectionsAsync(long id, IReadOnlyCollection<IgdbMetadataSectionKind> sections, CancellationToken ct = default) =>
+            throw new InvalidOperationException("Existing persistence still uses the complete query.");
         public Task<IgdbMetadataResult> GetByIdAsync(long id, CancellationToken ct = default)
         { Calls++; ct.ThrowIfCancellationRequested(); Before?.Invoke(); return Task.FromResult(Response(id)); }
     }
@@ -320,4 +322,21 @@ public sealed class GameEnrichmentDetailsTests
         Assert.Equal(condition == "missing" ? GameEnrichmentOutcome.GameNotFound : condition == "manual" ? GameEnrichmentOutcome.MissingIgdbId : GameEnrichmentOutcome.IdentityMismatch, r.Outcome);
         using var db = f.Db(); Assert.Empty(await db.GameTimeToBeats.ToListAsync()); Assert.Empty(await db.GameMultiplayerModes.ToListAsync()); Assert.Empty(await db.GameEnrichmentStates.ToListAsync());
     }
+    [Fact]
+    public async Task NotRequestedMultiplayerKeepsContentAndStateWhileTimeUpdates()
+    {
+        using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichDurationAndMultiplayerAsync(id);
+        var previous = await f.Snapshot("GameMultiplayerModes", "CatalogPlatforms");
+        GameEnrichmentState previousState;
+        using (var db = f.Db()) previousState = await db.GameEnrichmentStates.AsNoTracking().SingleAsync(s => s.Section == CatalogMetadataSection.Multiplayer);
+        f.Clock.Now = f.Clock.Now.AddDays(1);
+        f.Metadata.Response = game => Good(game) with { Multiplayer = new(IgdbMetadataStatus.NotRequested), TimeToBeat = new(IgdbMetadataStatus.Success, new(game, game, 1, 2, 3, 4)) };
+        var r = await f.Service.EnrichDurationAndMultiplayerAsync(id);
+        Assert.Equal(CatalogMetadataSection.TimeToBeat, Assert.Single(r.Sections).Section);
+        Assert.Equal(previous, await f.Snapshot("GameMultiplayerModes", "CatalogPlatforms"));
+        using var read = f.Db(); var stored = await read.GameEnrichmentStates.SingleAsync(s => s.Section == CatalogMetadataSection.Multiplayer);
+        Assert.Equal(previousState.LastAttemptAtUtc, stored.LastAttemptAtUtc); Assert.Equal(previousState.LastSuccessAtUtc, stored.LastSuccessAtUtc);
+        Assert.Equal(2, (await read.GameTimeToBeats.SingleAsync()).NormallySeconds);
+    }
+
 }

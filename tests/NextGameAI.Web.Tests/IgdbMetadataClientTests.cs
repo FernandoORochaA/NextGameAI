@@ -391,4 +391,70 @@ public sealed class IgdbMetadataClientTests
         Assert.IsType<IgdbClient>(provider.GetRequiredService<IIgdbClient>());
         Assert.DoesNotContain(typeof(IgdbMetadataClient).GetConstructors().SelectMany(c => c.GetParameters()), p => p.ParameterType.Name.Contains("DbContext"));
     }
+    [Theory]
+    [InlineData("Genres", 1, "id,genres.id,genres.name")]
+    [InlineData("Genres,Themes", 1, "id,genres.id,genres.name,themes.id,themes.name")]
+    [InlineData("TimeToBeat", 2, "id")]
+    [InlineData("Multiplayer", 2, "id")]
+    [InlineData("Genres,TimeToBeat", 2, "id,genres.id,genres.name")]
+    [InlineData("TimeToBeat,Multiplayer", 3, "id")]
+    public async Task SelectiveQueriesUseOnlyRequestedProjectionsAndEndpoints(string selection, int requests, string fields)
+    {
+        using var f = new Fixture { Game = """[{"id":974,"genres":[{"id":1,"name":"Synthetic"}],"themes":[],"keywords":[{"id":2,"name":"synthetic-not-requested"}]}]""" };
+        var sections = selection.Split(',').Select(Enum.Parse<IgdbMetadataSectionKind>).ToArray();
+        var result = await f.Client.GetSectionsAsync(974, sections);
+        Assert.Equal(requests, f.Requests.Count); Assert.Equal($"fields {fields}; where id = 974; limit 2;", f.Requests[0].Query);
+        Assert.Equal(sections.Contains(IgdbMetadataSectionKind.TimeToBeat), f.Requests.Any(r => r.Endpoint == "/v4/game_time_to_beats"));
+        Assert.Equal(sections.Contains(IgdbMetadataSectionKind.Multiplayer), f.Requests.Any(r => r.Endpoint == "/v4/multiplayer_modes"));
+        Assert.Equal(IgdbMetadataStatus.NotRequested, result.Keywords.Status); Assert.Null(result.Keywords.Value);
+        Assert.Equal(IgdbMetadataStatus.NotRequested, result.GameModes.Status);
+        if (!sections.Contains(IgdbMetadataSectionKind.Genres)) Assert.Equal(IgdbMetadataStatus.NotRequested, result.Genres.Status);
+        if (!sections.Contains(IgdbMetadataSectionKind.TimeToBeat)) Assert.Equal(IgdbMetadataStatus.NotRequested, result.TimeToBeat.Status);
+        if (!sections.Contains(IgdbMetadataSectionKind.Multiplayer)) Assert.Equal(IgdbMetadataStatus.NotRequested, result.Multiplayer.Status);
+        Assert.DoesNotContain("keywords", f.Requests[0].Query);
+    }
+
+    [Fact]
+    public async Task NoSelectedSectionsMakeNoHttpCallAndReturnOnlyNotRequested()
+    {
+        using var f = new Fixture(); var r = await f.Client.GetSectionsAsync(974, Array.Empty<IgdbMetadataSectionKind>());
+        Assert.Empty(f.Requests);
+        Assert.All(new[] { r.Genres, r.Themes, r.GameModes, r.PlayerPerspectives, r.Keywords }, s => { Assert.Equal(IgdbMetadataStatus.NotRequested, s.Status); Assert.Null(s.Value); });
+        Assert.Equal(IgdbMetadataStatus.NotRequested, r.TimeToBeat.Status); Assert.Equal(IgdbMetadataStatus.NotRequested, r.Multiplayer.Status);
+    }
+
+    [Theory]
+    [InlineData("[]", IgdbMetadataStatus.GameNotFound)]
+    [InlineData("[{\"id\":132181}]", IgdbMetadataStatus.InvalidResponse)]
+    [InlineData("[{\"id\":974,\"genres\":[{}]}]", IgdbMetadataStatus.InvalidResponse)]
+    [InlineData("[{\"id\":974,\"genres\":[]}]", IgdbMetadataStatus.Empty)]
+    public async Task SelectiveQueryKeepsRequestedFailureOrEmptyDistinctFromNotRequested(string game, IgdbMetadataStatus status)
+    {
+        using var f = new Fixture { Game = game };
+        var r = await f.Client.GetSectionsAsync(974, new[] { IgdbMetadataSectionKind.Genres });
+        Assert.Equal(status, r.Genres.Status); Assert.Equal(IgdbMetadataStatus.NotRequested, r.Themes.Status);
+        Assert.Equal(IgdbMetadataStatus.NotRequested, r.TimeToBeat.Status); Assert.Single(f.Requests);
+    }
+
+    [Theory]
+    [InlineData(401)] [InlineData(429)]
+    public async Task SelectiveFailureKeepsExistingRetryPolicyAndDoesNotMarkUnrequestedSectionsFailed(int status)
+    {
+        using var f = new Fixture(); f.Override = (_, _) => Task.FromResult(Json("synthetic-sensitive", (HttpStatusCode)status));
+        var r = await f.Client.GetSectionsAsync(974, new[] { IgdbMetadataSectionKind.Multiplayer });
+        Assert.Equal(2, f.Requests.Count); Assert.Equal(IgdbMetadataStatus.TransportFailure, r.Multiplayer.Status);
+        Assert.Equal(IgdbMetadataStatus.NotRequested, r.Genres.Status); Assert.Equal(IgdbMetadataStatus.NotRequested, r.TimeToBeat.Status);
+    }
+
+    [Fact]
+    public async Task SelectiveCancellationAndInvalidSectionsAreRejectedBeforeHttp()
+    {
+        using var f = new Fixture(); using var cts = new CancellationTokenSource(); cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Client.GetSectionsAsync(974, new[] { IgdbMetadataSectionKind.Genres }, cts.Token));
+        await Assert.ThrowsAsync<IgdbQueryException>(() => f.Client.GetSectionsAsync(974, new[] { (IgdbMetadataSectionKind)99 }));
+        await Assert.ThrowsAsync<IgdbQueryException>(() => f.Client.GetSectionsAsync(0, Array.Empty<IgdbMetadataSectionKind>()));
+        await Assert.ThrowsAsync<IgdbQueryException>(() => f.Client.GetSectionsAsync(974, null!));
+        Assert.Empty(f.Requests);
+    }
+
 }

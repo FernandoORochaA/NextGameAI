@@ -2,7 +2,8 @@ using System.Net;
 
 namespace NextGameAI.Web.Services.Igdb;
 
-public enum IgdbMetadataStatus { Success, Empty, GameNotFound, InvalidResponse, TransportFailure }
+public enum IgdbMetadataStatus { Success, Empty, GameNotFound, InvalidResponse, TransportFailure, NotRequested }
+public enum IgdbMetadataSectionKind { Genres, Themes, GameModes, PlayerPerspectives, Keywords, TimeToBeat, Multiplayer }
 public enum IgdbTaxonomyKind { Genre, Theme, GameMode, PlayerPerspective, Keyword }
 
 // Results are backend contracts, never added to the public MVC search projection.
