@@ -11,6 +11,7 @@ public static class IgdbSearchServiceCollectionExtensions
         services.AddSingleton<IgdbRequestScheduler>();
         services.AddTransient<IIgdbClient, IgdbClient>();
         services.AddTransient<IIgdbMetadataClient, IgdbMetadataClient>();
+        services.AddScoped<IGameEnrichmentService, GameEnrichmentService>();
         services.AddHttpClient<IgdbApiTransport>(client =>
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
