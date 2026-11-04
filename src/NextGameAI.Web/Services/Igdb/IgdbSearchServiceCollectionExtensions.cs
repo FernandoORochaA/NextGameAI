@@ -10,6 +10,7 @@ public static class IgdbSearchServiceCollectionExtensions
         services.TryAddSingleton<GameEnrichmentPolicy>();
         services.TryAddSingleton<GameEnrichmentCooldown>();
         services.TryAddSingleton<GameEnrichmentCoordinator>();
+        services.TryAddSingleton<IGameEnrichmentPublisher, GameEnrichmentPublisher>();
         services.AddSingleton<IgdbQueryCache>();
         services.AddSingleton<IgdbRequestScheduler>();
         services.AddTransient<IIgdbClient, IgdbClient>();

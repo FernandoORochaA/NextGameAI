@@ -8,8 +8,9 @@ namespace NextGameAI.Web.Services;
 // Explicit invocation only. Both public operations share the same coordinated core.
 public sealed partial class GameEnrichmentService(IServiceScopeFactory scopes, IIgdbMetadataClient metadata,
     TimeProvider clock, GameEnrichmentCoordinator coordinator, GameEnrichmentPolicy policy,
-    GameEnrichmentCooldown cooldown) : IGameEnrichmentService
+    GameEnrichmentCooldown cooldown, IGameEnrichmentPublisher? publication = null) : IGameEnrichmentService
 {
+    private readonly IGameEnrichmentPublisher publisher = publication ?? new GameEnrichmentPublisher(cooldown);
     public Task<GameEnrichmentResult> EnrichTaxonomiesAsync(int gameId, CancellationToken cancellationToken = default) =>
         EnrichCoreAsync(gameId, TaxonomySections, cancellationToken);
 

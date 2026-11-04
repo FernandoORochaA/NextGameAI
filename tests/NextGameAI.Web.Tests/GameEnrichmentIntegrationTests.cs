@@ -13,15 +13,57 @@ using NextGameAI.Web.Services.Igdb;
 namespace NextGameAI.Web.Tests;
 
 [Trait("Host", "None")]
-public sealed class GameEnrichmentIntegrationTests
+public sealed partial class GameEnrichmentIntegrationTests
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(15);
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static void WatchWriterWait(GameEnrichmentCoordinator coordinator, Action observer) =>
+        typeof(GameEnrichmentCoordinator).GetProperty("WriterWaitRegistered", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(coordinator, observer);
     private sealed class Clock : TimeProvider
     {
         private long ticks = new DateTime(2026, 11, 3, 12, 0, 0, DateTimeKind.Utc).Ticks;
+        private readonly object timersGate = new();
+        private readonly List<ManualTimer> timers = [];
+        public Action? TimerScheduled;
+        public bool FailScheduling;
         public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
-        public void Advance(TimeSpan value) => Interlocked.Add(ref ticks, value.Ticks);
+        public void Advance(TimeSpan value)
+        {
+            Interlocked.Add(ref ticks, value.Ticks);
+            ManualTimer[] due;
+            lock (timersGate)
+            {
+                due = timers.Where(t => t.Due <= Interlocked.Read(ref ticks)).ToArray();
+                foreach (var timer in due) timer.Due = long.MaxValue;
+            }
+            foreach (var timer in due) timer.Callback(timer.State);
+        }
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (FailScheduling) throw new InvalidOperationException("Synthetic scheduling failure");
+            var timer = new ManualTimer(this, callback, state);
+            timer.Change(dueTime, period); TimerScheduled?.Invoke(); return timer;
+        }
+        private sealed class ManualTimer(Clock owner, TimerCallback callback, object? state) : ITimer
+        {
+            public readonly TimerCallback Callback = callback;
+            public readonly object? State = state;
+            public long Due = long.MaxValue;
+            private bool disposed;
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                if (period != Timeout.InfiniteTimeSpan) throw new InvalidOperationException("Only one-shot test timers are supported.");
+                lock (owner.timersGate)
+                {
+                    if (disposed) return false;
+                    Due = dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : Interlocked.Read(ref owner.ticks) + dueTime.Ticks;
+                    if (!owner.timers.Contains(this)) owner.timers.Add(this);
+                    return true;
+                }
+            }
+            public void Dispose() { lock (owner.timersGate) { disposed = true; owner.timers.Remove(this); } }
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
     }
     private sealed record Query(long Id, IgdbMetadataSectionKind[] Sections);
     private sealed class Metadata : IIgdbMetadataClient
@@ -53,19 +95,34 @@ public sealed class GameEnrichmentIntegrationTests
     private sealed class SaveHook : SaveChangesInterceptor
     {
         public Func<DbContext, CancellationToken, Task>? BeforeSave;
+        public Func<DbContext, CancellationToken, Task>? AfterSave;
         public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData data,
             InterceptionResult<int> result, CancellationToken ct = default)
         { if (BeforeSave is not null) await BeforeSave(data.Context!, ct); return result; }
+        public override async ValueTask<int> SavedChangesAsync(SaveChangesCompletedEventData data, int result, CancellationToken ct = default)
+        { if (AfterSave is not null) await AfterSave(data.Context!, ct); return result; }
     }
     private sealed class CommitHook : DbTransactionInterceptor
     {
         public Func<CancellationToken, Task>? BeforeCommit;
         public Action? AfterCommit;
+        public Action? BeforeRollback;
         public override async ValueTask<InterceptionResult> TransactionCommittingAsync(DbTransaction transaction,
             TransactionEventData data, InterceptionResult result, CancellationToken ct = default)
         { if (BeforeCommit is not null) await BeforeCommit(ct); return result; }
         public override Task TransactionCommittedAsync(DbTransaction transaction, TransactionEndEventData data, CancellationToken ct = default)
         { AfterCommit?.Invoke(); return Task.CompletedTask; }
+        public override ValueTask<InterceptionResult> TransactionRollingBackAsync(DbTransaction transaction,
+            TransactionEventData data, InterceptionResult result, CancellationToken ct = default)
+        { BeforeRollback?.Invoke(); return ValueTask.FromResult(result); }
+    }
+    private sealed class Publisher(GameEnrichmentCooldown cooldown) : IGameEnrichmentPublisher
+    {
+        public Action<EnrichmentCooldownObservation>? BeforePublish;
+        public Action<EnrichmentCooldownObservation>? AfterPublish;
+        public readonly ConcurrentQueue<EnrichmentCooldownObservation> Calls = new();
+        public void Publish(EnrichmentCooldownObservation observation)
+        { Calls.Enqueue(observation); BeforePublish?.Invoke(observation); cooldown.RecordConfirmed(observation); AfterPublish?.Invoke(observation); }
     }
     private sealed class Fixture : IDisposable
     {
@@ -78,16 +135,20 @@ public sealed class GameEnrichmentIntegrationTests
         public readonly GameEnrichmentCoordinator Coordinator = new();
         public readonly GameEnrichmentPolicy Policy;
         public readonly GameEnrichmentCooldown Cooldown;
+        public readonly Publisher Publication;
         public readonly SaveHook Save = new();
         public readonly CommitHook Commit = new();
+        public Action? ScopeDisposed;
         private readonly ServiceProvider root;
         public Fixture()
         {
             connectionString = new SqliteConnectionStringBuilder
-                { DataSource = name, Mode = SqliteOpenMode.Memory, Cache = SqliteCacheMode.Shared, ForeignKeys = true, Pooling = false }.ToString();
+                { DataSource = name, Mode = SqliteOpenMode.Memory, Cache = SqliteCacheMode.Shared, ForeignKeys = true, Pooling = false, DefaultTimeout = 1 }.ToString();
             guard = new(name); keeper = new(connectionString); guard.Validate(keeper); keeper.Open();
-            Policy = new(Clock); Cooldown = new(Clock, Policy);
-            var services = new ServiceCollection(); services.AddScoped<NextGameAiDbContext>(_ => Db());
+            Policy = new(Clock); Cooldown = new(Clock, Policy); Publication = new(Cooldown);
+            var services = new ServiceCollection();
+            services.AddScoped(_ => new ScopeProbe(() => ScopeDisposed?.Invoke()));
+            services.AddScoped<NextGameAiDbContext>(sp => { _ = sp.GetRequiredService<ScopeProbe>(); return Db(); });
             root = services.BuildServiceProvider(validateScopes: true);
             using var db = Db(); db.Database.Migrate(); // Test memory only; never Program.cs or personal database.
         }
@@ -98,11 +159,26 @@ public sealed class GameEnrichmentIntegrationTests
                 .AddInterceptors(guard, Save, Commit).Options;
             return new NextGameAiDbContext(options);
         }
-        public IGameEnrichmentService Service() => new GameEnrichmentService(root.GetRequiredService<IServiceScopeFactory>(), Metadata, Clock, Coordinator, Policy, Cooldown);
+        public IGameEnrichmentService Service() => new GameEnrichmentService(root.GetRequiredService<IServiceScopeFactory>(), Metadata, Clock, Coordinator, Policy, Cooldown, Publication);
         public async Task<int> Game(long externalId = 974)
         { using var db = Db(); var game = new Game { Title = "Synthetic", IgdbId = externalId }; db.Games.Add(game); await db.SaveChangesAsync(); return game.Id; }
+        public async Task<string> Snapshot()
+        {
+            using var db = Db(); await db.Database.OpenConnectionAsync();
+            var values = new List<object>();
+            foreach (var table in new[] { "Games", "CatalogTaxonomies", "GameTaxonomies", "GameTimeToBeats", "CatalogPlatforms", "GameMultiplayerModes", "GameEnrichmentStates", "LibraryEntries", "GameOwnerships" })
+            {
+                using var command = db.Database.GetDbConnection().CreateCommand(); command.CommandText = $"SELECT * FROM {table} ORDER BY rowid";
+                using var reader = await command.ExecuteReaderAsync(); var rows = new List<object[]>();
+                while (await reader.ReadAsync()) { var row = new object[reader.FieldCount]; reader.GetValues(row); rows.Add(row); }
+                values.Add(rows);
+            }
+            return System.Text.Json.JsonSerializer.Serialize(values);
+        }
         public void Dispose() { root.Dispose(); keeper.Dispose(); }
     }
+    private sealed class ScopeProbe(Action onDispose) : IDisposable
+    { public void Dispose() => onDispose(); }
     private static IgdbMetadataResult Good(long id)
     {
         IgdbMetadataSection<IReadOnlyList<IgdbTaxonomyResult>> Tax(IgdbTaxonomyKind kind) =>
@@ -225,6 +301,7 @@ public sealed class GameEnrichmentIntegrationTests
     {
         using var f = new Fixture(); var first = await f.Game(); var second = await f.Game(132181);
         var bothQueried = Signal(); var releaseHttp = Signal(); var saving = Signal(); var releaseSave = Signal();
+        var writerWaiting = Signal(); WatchWriterWait(f.Coordinator, () => writerWaiting.TrySetResult());
         var queries = 0; var saves = 0;
         f.Metadata.Handler = async (external, _, ct) =>
         { if (Interlocked.Increment(ref queries) == 2) bothQueried.SetResult(); await releaseHttp.Task.WaitAsync(ct); return Good(external); };
@@ -232,6 +309,7 @@ public sealed class GameEnrichmentIntegrationTests
         { if (Interlocked.Increment(ref saves) == 1) { saving.SetResult(); await releaseSave.Task.WaitAsync(ct); } };
         var a = Run(f.Service(), first, details); var b = Run(f.Service(), second, details);
         await bothQueried.Task.WaitAsync(Deadline); releaseHttp.SetResult(); await saving.Task.WaitAsync(Deadline);
+        await writerWaiting.Task.WaitAsync(Deadline); // The second operation has registered its global semaphore wait.
         Assert.Equal(1, Volatile.Read(ref saves)); releaseSave.SetResult();
         await Task.WhenAll(a, b).WaitAsync(Deadline); Assert.Equal(2, saves);
         using var db = f.Db();

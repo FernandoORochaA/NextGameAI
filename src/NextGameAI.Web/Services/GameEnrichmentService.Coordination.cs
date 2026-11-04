@@ -23,10 +23,7 @@ public sealed partial class GameEnrichmentService
         ct.ThrowIfCancellationRequested();
         using var gameLease = await coordinator.AcquireGameAsync(gameId, ct);
         var decisions = new List<GameEnrichmentSectionDecision>();
-        var writing = new List<CatalogMetadataSection>();
         var ids = new Dictionary<CatalogMetadataSection, EnrichmentAttemptId>();
-        var commitStarted = false;
-        GameEnrichmentResult? committed = null;
         try
         {
             long? igdbId;
@@ -67,84 +64,12 @@ public sealed partial class GameEnrichmentService
             // Freeze both the destined persisted timestamp and the post-client deadline before waiting.
             var observations = plans.ToDictionary(p => p.Result.Section,
                 p => cooldown.PrepareResult(ids[p.Result.Section], clientCompleted, clientCompleted, p.Result)!);
-            writing.AddRange(plans.Select(p => p.Result.Section));
-            using var writer = await gameLease.AcquireWriteAsync(ct);
-            ct.ThrowIfCancellationRequested();
-            using var writeScope = scopes.CreateScope();
-            var db = writeScope.ServiceProvider.GetRequiredService<NextGameAiDbContext>();
-            await using var transaction = await db.Database.BeginTransactionAsync(ct);
-            if (!await Matches(db, gameId, igdbId.Value, ct))
-                return Batch(GameEnrichmentOutcome.IdentityMismatch, [], decisions.Concat(selected.Select(s => new GameEnrichmentSectionDecision(s, GameEnrichmentDisposition.DiscardedAfterRevalidation))));
-            var current = await db.GameEnrichmentStates.Where(s => s.GameId == gameId).ToDictionaryAsync(s => s.Section, ct);
-            var allowed = new List<Work>();
-            foreach (var plan in plans)
-            {
-                var section = plan.Result.Section;
-                var before = initial.GetValueOrDefault(section);
-                var state = current.GetValueOrDefault(section);
-                var blocked = Blocked(gameId, section, state);
-                if (!SameState(before, state) || blocked is not null || clock.GetUtcNow().UtcDateTime < clientCompleted)
-                    decisions.Add(new(section, GameEnrichmentDisposition.DiscardedAfterRevalidation, blocked?.NextAllowedAtUtc));
-                else allowed.Add(plan);
-            }
-            writing.Clear(); writing.AddRange(allowed.Select(p => p.Result.Section));
-            if (allowed.Count == 0) return Batch(GameEnrichmentOutcome.Preserved, [], decisions);
-            var results = new List<TaxonomyEnrichmentResult>();
-            foreach (var plan in allowed)
-            {
-                var result = plan.Result;
-                if (result.Outcome == TaxonomyEnrichmentOutcome.Applied && !await plan.Persist!(db, gameId, ct))
-                {
-                    result = result with { Outcome = TaxonomyEnrichmentOutcome.InvalidResponse };
-                    observations[result.Section] = cooldown.PrepareResult(ids[result.Section], clientCompleted, clientCompleted, result)!;
-                }
-                var state = current.GetValueOrDefault(result.Section);
-                if (state is null)
-                {
-                    state = new GameEnrichmentState { GameId = gameId, Section = result.Section };
-                    db.GameEnrichmentStates.Add(state);
-                }
-                state.LastAttemptAtUtc = clientCompleted;
-                state.Source = "IGDB";
-                state.LastResult = result.Outcome switch
-                {
-                    TaxonomyEnrichmentOutcome.Applied => CatalogUpdateResult.Success,
-                    TaxonomyEnrichmentOutcome.GameNotFound => CatalogUpdateResult.NotFound,
-                    _ => CatalogUpdateResult.TemporaryFailure
-                };
-                if (state.LastResult == CatalogUpdateResult.Success) state.LastSuccessAtUtc = clientCompleted;
-                results.Add(result);
-            }
-            await db.SaveChangesAsync(ct);
-            if (!await Matches(db, gameId, igdbId.Value, ct))
-                return Batch(GameEnrichmentOutcome.IdentityMismatch, [], decisions.Concat(writing.Select(s => new GameEnrichmentSectionDecision(s, GameEnrichmentDisposition.DiscardedAfterRevalidation))));
-            ct.ThrowIfCancellationRequested();
-            commitStarted = true;
-            await transaction.CommitAsync(ct);
-            var applied = results.Count(r => r.Outcome == TaxonomyEnrichmentOutcome.Applied);
-            var incomplete = decisions.Any(d => d.Disposition is GameEnrichmentDisposition.DiscardedAfterRevalidation or GameEnrichmentDisposition.NotRequested);
-            committed = Batch(applied == results.Count && !incomplete ? GameEnrichmentOutcome.Applied : applied > 0 ? GameEnrichmentOutcome.Partial : GameEnrichmentOutcome.Preserved,
-                results, decisions.Concat(results.Select(r => new GameEnrichmentSectionDecision(r.Section, Disposition(r)))));
-            // No cancellation check after confirmed commit: finish publication before releasing the game.
-            foreach (var result in results) cooldown.RecordConfirmed(observations[result.Section]);
-            return committed;
+            return await RecoverWriteAsync(gameId, igdbId.Value, gameLease, initial, plans, observations, ids, clientCompleted, decisions, ct);
         }
-        catch (OperationCanceledException) when (committed is not null)
+        catch (Exception error) when (ManagedFailure(error) && error is (DbUpdateException or DbException or ValidationException))
         {
-            return committed;
-        }
-        catch (OperationCanceledException) when (commitStarted && committed is null)
-        {
-            return Batch(GameEnrichmentOutcome.CommitIndeterminate, [], decisions.Concat(writing.Select(s => new GameEnrichmentSectionDecision(s, GameEnrichmentDisposition.CommitIndeterminate))));
-        }
-        catch (Exception error) when (error is DbUpdateException or DbException or ValidationException)
-        {
-            // Scoped transaction/context/write lease were disposed before entering this handler.
-            if (committed is not null) return committed;
-            if (commitStarted)
-                return Batch(GameEnrichmentOutcome.CommitIndeterminate, [], decisions.Concat(writing.Select(s => new GameEnrichmentSectionDecision(s, GameEnrichmentDisposition.CommitIndeterminate))));
-            foreach (var section in writing) cooldown.RecordPersistenceFailure(ids[section], clock.GetUtcNow().UtcDateTime);
-            return Batch(GameEnrichmentOutcome.PersistenceFailure, [], decisions.Concat(writing.Select(s => new GameEnrichmentSectionDecision(s, GameEnrichmentDisposition.PersistenceFailure))));
+            // Initial-read failure only: recovery classifies and returns its own write failures.
+            return Result(GameEnrichmentOutcome.PersistenceFailure);
         }
     }
 

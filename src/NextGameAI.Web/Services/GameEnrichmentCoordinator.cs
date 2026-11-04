@@ -21,6 +21,15 @@ public sealed class GameEnrichmentCoordinator(int capacity = 1024)
     private readonly object gate = new();
     private readonly Dictionary<int, Entry> entries = [];
     private readonly SemaphoreSlim writer = new(1, 1);
+    // Internal diagnostic seam: signals an actually registered waiter, without exposing game data.
+    // Observer failures must never change lock ownership or strand the pending wait.
+    internal Action? WriterWaitRegistered { get; set; }
+
+    private void NotifyWriterWait()
+    {
+        try { WriterWaitRegistered?.Invoke(); }
+        catch (Exception error) when (EnrichmentExceptionPolicy.IsManaged(error)) { }
+    }
     private static long lastAttempt;
 
     private static long NextAttempt()
@@ -101,6 +110,7 @@ public sealed class GameEnrichmentCoordinator(int capacity = 1024)
         // There is intentionally no coordinator-level AcquireWrite: an active game lease is required.
         public async Task<WriteLease> AcquireWriteAsync(CancellationToken cancellationToken = default)
         {
+            using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             lock (sync)
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
@@ -108,18 +118,34 @@ public sealed class GameEnrichmentCoordinator(int capacity = 1024)
                 cancellationToken.ThrowIfCancellationRequested();
                 writing = true;
             }
+            Task? pending = null;
             var acquired = false;
             try
             {
-                await owner.writer.WaitAsync(cancellationToken).ConfigureAwait(false);
+                pending = owner.writer.WaitAsync(waitCancellation.Token);
+                if (!pending.IsCompleted) owner.NotifyWriterWait();
+                await pending.ConfigureAwait(false);
                 acquired = true;
                 lock (sync) ObjectDisposedException.ThrowIf(disposed, this);
                 return new WriteLease(this);
             }
             catch
             {
-                if (acquired) owner.writer.Release();
-                FinishWriting();
+                try
+                {
+                    if (pending is not null && !acquired)
+                    {
+                        // Cancel is not enough: observe completion, including a concurrent successful acquisition.
+                        waitCancellation.Cancel();
+                        try { await pending.ConfigureAwait(false); acquired = true; }
+                        catch (OperationCanceledException) { }
+                    }
+                }
+                finally
+                {
+                    if (acquired) owner.writer.Release();
+                    FinishWriting();
+                }
                 throw;
             }
         }

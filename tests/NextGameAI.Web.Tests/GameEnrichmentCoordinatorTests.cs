@@ -11,6 +11,82 @@ public sealed class GameEnrichmentCoordinatorTests
     // Timeouts only detect hangs; ordering is established by signals and synchronous admission to WaitAsync.
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(15);
 
+    private static void ObserveWait(GameEnrichmentCoordinator coordinator, Action? observer) =>
+        typeof(GameEnrichmentCoordinator).GetProperty("WriterWaitRegistered", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(coordinator, observer);
+
+    [Theory]
+    [InlineData("held")] [InlineData("released")] [InlineData("cancel-first")] [InlineData("release-first")]
+    [InlineData("dispose-game")] [InlineData("aggregate-fatal")]
+    public async Task FatalObserverClosesRegisteredWaitBeforePropagatingAndNextWriterWorks(string scenario)
+    {
+        var c = new GameEnrichmentCoordinator();
+        using var a = await c.AcquireGameAsync(1); var b = await c.AcquireGameAsync(2); using var nextGame = await c.AcquireGameAsync(3);
+        var first = await a.AcquireWriteAsync(); using var cancellation = new CancellationTokenSource(); var registered = Signal();
+        Exception fault = scenario == "aggregate-fatal"
+            ? new AggregateException(new InvalidOperationException("Synthetic"), new OutOfMemoryException("Synthetic object only"))
+            : new OutOfMemoryException("Synthetic object only, no exhaustion");
+        ObserveWait(c, () =>
+        {
+            registered.TrySetResult();
+            if (scenario == "cancel-first") { cancellation.Cancel(); first.Dispose(); }
+            if (scenario is "released" or "release-first") { first.Dispose(); if (scenario == "release-first") cancellation.Cancel(); }
+            if (scenario == "dispose-game") b.Dispose();
+            throw fault;
+        });
+        var failed = b.AcquireWriteAsync(cancellation.Token); await registered.Task.WaitAsync(Deadline);
+        Assert.Same(fault, await Record.ExceptionAsync(() => failed.WaitAsync(Deadline)));
+        ObserveWait(c, null);
+        first.Dispose(); b.Dispose();
+        using var next = await nextGame.AcquireWriteAsync().WaitAsync(Deadline);
+        // A stale permission or Release double would allow this writer to enter concurrently.
+        var waiting = a.AcquireWriteAsync(); Assert.False(waiting.IsCompleted);
+        next.Dispose(); (await waiting.WaitAsync(Deadline)).Dispose();
+        a.Dispose(); nextGame.Dispose(); Assert.Equal(0, c.RegisteredGameCount);
+    }
+
+    [Fact]
+    public async Task AvailableWriterDoesNotInvokeWaitObserverAndDoubleDisposeRemainsSafe()
+    {
+        var c = new GameEnrichmentCoordinator(); using var game = await c.AcquireGameAsync(1); var calls = 0;
+        ObserveWait(c, () => { calls++; throw new OutOfMemoryException("Synthetic observer must not run without waiting"); });
+        var write = await game.AcquireWriteAsync().WaitAsync(Deadline);
+        Assert.Equal(0, calls); write.Dispose(); await write.DisposeAsync();
+        using var again = await game.AcquireWriteAsync().WaitAsync(Deadline); Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public async Task CancelAndAcquisitionCanRaceWithoutLostOrDuplicateGlobalPermission()
+    {
+        for (var round = 0; round < 30; round++)
+        {
+            var c = new GameEnrichmentCoordinator(); using var a = await c.AcquireGameAsync(1); using var b = await c.AcquireGameAsync(2);
+            var held = await a.AcquireWriteAsync(); using var cancel = new CancellationTokenSource(); var registered = Signal(); var start = Signal();
+            ObserveWait(c, () => registered.TrySetResult());
+            var pending = b.AcquireWriteAsync(cancel.Token); await registered.Task.WaitAsync(Deadline);
+            var release = Task.Run(async () => { await start.Task; held.Dispose(); });
+            var cancellation = Task.Run(async () => { await start.Task; cancel.Cancel(); });
+            start.SetResult(); await Task.WhenAll(release, cancellation).WaitAsync(Deadline);
+            try { (await pending.WaitAsync(Deadline)).Dispose(); }
+            catch (OperationCanceledException) { }
+            ObserveWait(c, null);
+            using var next = await a.AcquireWriteAsync().WaitAsync(Deadline);
+            var another = b.AcquireWriteAsync(); Assert.False(another.IsCompleted);
+            next.Dispose(); (await another.WaitAsync(Deadline)).Dispose();
+            a.Dispose(); b.Dispose(); Assert.Equal(0, c.RegisteredGameCount);
+        }
+    }
+
+    [Fact]
+    public async Task DiagnosticObserverFailureDoesNotStrandRegisteredWriterWait()
+    {
+        var c = new GameEnrichmentCoordinator(); using var a = await c.AcquireGameAsync(1); using var b = await c.AcquireGameAsync(2);
+        var write = await a.AcquireWriteAsync(); var waiting = Signal();
+        typeof(GameEnrichmentCoordinator).GetProperty("WriterWaitRegistered", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(c, (Action)(() => { waiting.TrySetResult(); throw new InvalidOperationException("Synthetic observer failure"); }));
+        var pending = b.AcquireWriteAsync(); await waiting.Task.WaitAsync(Deadline); Assert.False(pending.IsCompleted);
+        write.Dispose(); (await pending.WaitAsync(Deadline)).Dispose(); a.Dispose(); b.Dispose(); Assert.Equal(0, c.RegisteredGameCount);
+    }
+
     [Fact]
     public async Task AttemptSequencesAreUniqueAcrossConcurrentLeasesAndCoordinators()
     {

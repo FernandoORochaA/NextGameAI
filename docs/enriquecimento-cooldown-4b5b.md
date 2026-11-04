@@ -120,3 +120,82 @@ Os resultados contêm decisões tipadas para recentes, cooldown, inconsistência
 resultados confirmados. `Sections` continua contendo somente resultados efetivamente persistidos.
 Coordenador, cooldown, política e relógio mantêm os lifetimes existentes; não há retries SQLite,
 mudança de transporte/scheduler, migrations ou sincronização entre processos.
+
+## Recuperação 4B.5C.4
+
+A consulta externa continua única. A fase de escrita admite uma tentativa inicial e, no máximo,
+uma retentativa. O núcleo usa as mesmas identidades, resultados externos e observações com prazo
+absoluto; não reinicia o enriquecimento nem recalcula Retry-After.
+
+A classificação usa SqliteErrorCode e SqliteExtendedErrorCode, diretamente ou no InnerException
+SQLite de DbUpdateException. Não usa mensagens. A lista conservadora de contenção recuperável é:
+
+| Primário | Estendido aceito | Classificação |
+|---|---|---|
+| SQLITE_BUSY (5) | 5, BUSY_RECOVERY (261), BUSY_SNAPSHOT (517) | Busy |
+| SQLITE_LOCKED (6) | 6, LOCKED_SHAREDCACHE (262) | Locked |
+
+Outras extensões não listadas não recebem retry. FOREIGN KEY, CHECK, UNIQUE, PRIMARY KEY e outras
+constraints não são repetidas; não há comprovação suficiente para tratar unicidade como disputa
+recuperável de referência. Erros desconhecidos e erros de lógica também não são repetidos.
+
+A retentativa exige falha anterior ao início de CommitAsync, rollback explícito bem-sucedido
+quando há transação, descarte bem-sucedido de transação/contexto e liberação da escrita global.
+Se a abertura da transação falhar, não houve fase de commit; os recursos adquiridos ainda precisam
+ser encerrados. Qualquer falha de limpeza impede retry e fica indicada por CleanupCompleted=false.
+
+Depois da limpeza há espera cancelável de 200 ms por TimeProvider, mantendo apenas o GameLease.
+A segunda tentativa readquire escrita global e cria novo contexto e transação. Recarrega identidade,
+estados e referências compartilhadas; estados alterados são descartados, sem novo HTTP.
+
+Uma primeira falha recuperada não publica cooldown de persistência. Após falha final pré-commit,
+somente o cooldown de persistência em memória é registrado. Cancelamento antes do commit, durante
+a espera ou na segunda escrita não cria cooldown novo. Não há escrita compensatória.
+
+O estágio de commit é explícito. Enquanto CommitAsync não retorna normalmente, exceções gerenciadas
+relevantes, inclusive cancelamento e exceções fora das famílias de banco, geram CommitIndeterminate.
+Dispor recursos ou observar rollback depois não prova que não houve commit. Não há retry nesse caso.
+Exceções fatais identificadas (OutOfMemoryException, StackOverflowException, AccessViolationException,
+inclusive encapsuladas) não são convertidas em resultados de recuperação.
+
+Depois do retorno normal de CommitAsync, CommitState=Confirmed permanece preservado. A publicação
+usa a fronteira pequena IGameEnrichmentPublisher, cujo adaptador normal chama RecordConfirmed.
+Cada publicação é tentada uma vez, sem reiniciar HTTP ou transação. Uma falha gera
+CommittedWithPublicationFailure; PublishedSections lista chamadas concluídas e PublicationFailedSections
+lista chamadas que falharam. Uma chamada pode ter alterado o cache antes de lançar exceção: a lista
+de falhas não afirma ausência de efeito. PublicationState distingue Complete, Partial e Failed.
+As demais seções continuam sendo publicadas quando uma falha. Não existe reconciliação automática.
+
+Falha gerenciada na limpeza após commit confirmado gera CommittedWithPostCommitFailure, preservando
+o commit e a indicação de limpeza. Nenhum desses casos vira PersistenceFailure ou cooldown de escrita.
+WriteAttempts informa tentativas de persistência (até duas), sem alterar os resultados por seção.
+
+Os testes usam relógio/timers controlados, falhas injetadas e SQLite nomeado em memória com conexões
+distintas. Há contenção real de um escritor externo ao coordenador. Exceções após confirmação SQLite,
+mas antes do retorno observado pelo chamador, são injetadas por interceptores EF como proteção defensiva;
+isso não afirma que todas as falhas reais do provider possam ser reproduzidas ou identificadas.
+Um sinal interno de diagnóstico confirma registro efetivo na espera global; falhas gerenciadas do
+observador não alteram a propriedade do semáforo. Esse sinal não expõe dados de jogos ao MVC.
+
+Continuam os limites de uma instância, memória volátil, ausência de recibo durável e impossibilidade
+de detectar ABA externo com todos os campos restaurados. Entidades, migrations, banco pessoal,
+transporte IGDB, scheduler, controllers e Views não são alterados por esta entrega.
+
+### Correções pós-auditoria da 4B.5C.4
+
+A definição de fatal é compartilhada entre recuperação e diagnóstico da espera. A classificação
+percorre iterativamente InnerException e todos os ramos de AggregateException.InnerExceptions,
+incluindo wrappers e agregados aninhados. Referências já visitadas são reconhecidas por identidade,
+evitando revisitas e ciclos. A lista de tipos fatais permanece a mesma.
+
+A aquisição global usa cancelamento interno ligado ao solicitante. Se o observador propagar uma
+falha, a espera já registrada é cancelada e sua conclusão é aguardada antes de encerrar a intenção
+de escrita e propagar a exceção original. Se a aquisição tiver vencido a corrida, sua permissão é
+liberada uma única vez; se a espera terminou cancelada, não há Release. O CTS local só é descartado
+depois desse tratamento. Não há espera órfã ou continuação sem supervisão.
+
+Falhas comuns do observador continuam neutras. A sinalização continua ocorrendo após registro
+efetivo da espera; quando a escrita já está disponível, o observador de espera não é invocado.
+Os testes usam objetos sintéticos de exceção fatal e sinais explícitos, sem provocar exaustão ou
+afirmar recuperação segura do processo após uma falha fatal real. Retry e semântica de commit
+permanecem inalterados.
