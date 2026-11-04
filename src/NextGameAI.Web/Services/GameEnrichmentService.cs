@@ -1,5 +1,3 @@
-using System.ComponentModel.DataAnnotations;
-using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using NextGameAI.Web.Data;
 using NextGameAI.Web.Models;
@@ -7,102 +5,16 @@ using NextGameAI.Web.Services.Igdb;
 
 namespace NextGameAI.Web.Services;
 
-// Inert until explicitly called. Sequential idempotence only; coordination belongs to 4B.5.
+// Explicit invocation only. Both public operations share the same coordinated core.
 public sealed partial class GameEnrichmentService(IServiceScopeFactory scopes, IIgdbMetadataClient metadata,
-    TimeProvider clock) : IGameEnrichmentService
+    TimeProvider clock, GameEnrichmentCoordinator coordinator, GameEnrichmentPolicy policy,
+    GameEnrichmentCooldown cooldown) : IGameEnrichmentService
 {
     public Task<GameEnrichmentResult> EnrichTaxonomiesAsync(int gameId, CancellationToken cancellationToken = default) =>
-        EnrichCoreAsync(gameId, false, cancellationToken);
+        EnrichCoreAsync(gameId, TaxonomySections, cancellationToken);
 
     public Task<GameEnrichmentResult> EnrichDurationAndMultiplayerAsync(int gameId, CancellationToken cancellationToken = default) =>
-        EnrichCoreAsync(gameId, true, cancellationToken);
-
-    private async Task<GameEnrichmentResult> EnrichCoreAsync(int gameId, bool details, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        try
-        {
-            long? igdbId;
-            using (var scope = scopes.CreateScope())
-            {
-                var db = scope.ServiceProvider.GetRequiredService<NextGameAiDbContext>();
-                var identity = await db.Games.AsNoTracking().Where(g => g.Id == gameId)
-                    .Select(g => new { g.IgdbId }).SingleOrDefaultAsync(cancellationToken);
-                if (identity is null) return Result(GameEnrichmentOutcome.GameNotFound);
-                igdbId = identity.IgdbId;
-            }
-            if (igdbId is not > 0) return Result(GameEnrichmentOutcome.MissingIgdbId);
-
-            // No transaction or tracked context crosses the external query.
-            IgdbMetadataResult external;
-            try { external = await metadata.GetByIdAsync(igdbId.Value, cancellationToken); }
-            catch (IgdbQueryException error) { external = Failed(igdbId.Value, error); }
-            if (external.IgdbId != igdbId) return Result(GameEnrichmentOutcome.IdentityMismatch);
-            var plans = details ? new[] { PrepareTime(external.TimeToBeat, igdbId.Value), PrepareMultiplayer(external.Multiplayer, igdbId.Value) } : new[]
-            {
-                Prepare(CatalogMetadataSection.Genres, CatalogTaxonomyKind.Genre, IgdbTaxonomyKind.Genre, external.Genres),
-                Prepare(CatalogMetadataSection.Themes, CatalogTaxonomyKind.Theme, IgdbTaxonomyKind.Theme, external.Themes),
-                Prepare(CatalogMetadataSection.GameModes, CatalogTaxonomyKind.GameMode, IgdbTaxonomyKind.GameMode, external.GameModes),
-                Prepare(CatalogMetadataSection.PlayerPerspectives, CatalogTaxonomyKind.PlayerPerspective, IgdbTaxonomyKind.PlayerPerspective, external.PlayerPerspectives),
-                Prepare(CatalogMetadataSection.Keywords, CatalogTaxonomyKind.Keyword, IgdbTaxonomyKind.Keyword, external.Keywords)
-            }.Select(plan => new Work(plan.Result, async (db, id, ct) =>
-            {
-                await Synchronize(db, id, plan, ct);
-                return true;
-            })).ToArray();
-            plans = plans.Where(p => p.Result.ExternalStatus != IgdbMetadataStatus.NotRequested).ToArray();
-            if (plans.Length == 0) return Result(GameEnrichmentOutcome.Preserved);
-            var now = clock.GetUtcNow().UtcDateTime;
-            using var writeScope = scopes.CreateScope();
-            var write = writeScope.ServiceProvider.GetRequiredService<NextGameAiDbContext>();
-            await using var transaction = await write.Database.BeginTransactionAsync(cancellationToken);
-            if (!await Matches(write, gameId, igdbId.Value, cancellationToken))
-                return Result(GameEnrichmentOutcome.IdentityMismatch);
-            for (var index = 0; index < plans.Length; index++)
-            {
-                var plan = plans[index];
-                if (plan.Result.Outcome == TaxonomyEnrichmentOutcome.Applied)
-                {
-                    if (!await plan.Persist!(write, gameId, cancellationToken))
-                    {
-                        plan = plan with { Result = plan.Result with { Outcome = TaxonomyEnrichmentOutcome.InvalidResponse } };
-                        plans[index] = plan;
-                    }
-                }
-                var state = await write.GameEnrichmentStates.SingleOrDefaultAsync(
-                    s => s.GameId == gameId && s.Section == plan.Result.Section, cancellationToken);
-                // Never fabricate timestamps or violate a newer persisted state when the clock moves back.
-                if (state is not null && state.LastAttemptAtUtc > now)
-                    return Result(GameEnrichmentOutcome.PersistenceFailure);
-                if (state is null)
-                {
-                    state = new GameEnrichmentState { GameId = gameId, Section = plan.Result.Section };
-                    write.GameEnrichmentStates.Add(state);
-                }
-                state.LastAttemptAtUtc = now;
-                state.Source = "IGDB";
-                state.LastResult = plan.Result.Outcome switch
-                {
-                    TaxonomyEnrichmentOutcome.Applied => CatalogUpdateResult.Success,
-                    TaxonomyEnrichmentOutcome.GameNotFound => CatalogUpdateResult.NotFound,
-                    _ => CatalogUpdateResult.TemporaryFailure
-                };
-                if (state.LastResult == CatalogUpdateResult.Success) state.LastSuccessAtUtc = now;
-            }
-            await write.SaveChangesAsync(cancellationToken);
-            if (!await Matches(write, gameId, igdbId.Value, cancellationToken))
-                return Result(GameEnrichmentOutcome.IdentityMismatch);
-            await transaction.CommitAsync(cancellationToken);
-            var applied = plans.Count(p => p.Result.Outcome == TaxonomyEnrichmentOutcome.Applied);
-            return new(applied == plans.Length ? GameEnrichmentOutcome.Applied : applied > 0
-                ? GameEnrichmentOutcome.Partial : GameEnrichmentOutcome.Preserved,
-                Array.AsReadOnly(plans.Select(p => p.Result).ToArray()));
-        }
-        // Disposal rolls back the complete operation, including state writes. No raw exception escapes.
-        catch (DbUpdateException) { return Result(GameEnrichmentOutcome.PersistenceFailure); }
-        catch (DbException) { return Result(GameEnrichmentOutcome.PersistenceFailure); }
-        catch (ValidationException) { return Result(GameEnrichmentOutcome.PersistenceFailure); }
-    }
+        EnrichCoreAsync(gameId, DetailSections, cancellationToken);
 
     private static Task<bool> Matches(NextGameAiDbContext db, int id, long externalId, CancellationToken ct) =>
         db.Games.AsNoTracking().AnyAsync(g => g.Id == id && g.IgdbId == externalId, ct);

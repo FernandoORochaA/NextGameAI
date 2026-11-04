@@ -23,9 +23,9 @@ public sealed class GameEnrichmentDetailsTests
         public Func<long, IgdbMetadataResult> Response = Good;
         public Action? Before;
         public int Calls;
-        public Task<IgdbMetadataResult> GetSectionsAsync(long id, IReadOnlyCollection<IgdbMetadataSectionKind> sections, CancellationToken ct = default) =>
-            throw new InvalidOperationException("Existing persistence still uses the complete query.");
-        public Task<IgdbMetadataResult> GetByIdAsync(long id, CancellationToken ct = default)
+        public Task<IgdbMetadataResult> GetByIdAsync(long id, CancellationToken ct = default) =>
+            throw new InvalidOperationException("Coordinated enrichment must use selective queries.");
+        public Task<IgdbMetadataResult> GetSectionsAsync(long id, IReadOnlyCollection<IgdbMetadataSectionKind> sections, CancellationToken ct = default)
         { Calls++; ct.ThrowIfCancellationRequested(); Before?.Invoke(); return Task.FromResult(Response(id)); }
     }
     private sealed class Fixture : IDisposable
@@ -42,9 +42,12 @@ public sealed class GameEnrichmentDetailsTests
             var services = new ServiceCollection();
             services.AddDbContext<NextGameAiDbContext>(o => o.UseSqlite(Connection).AddInterceptors(guard));
             services.AddSingleton<TimeProvider>(Clock); services.AddSingleton<IIgdbMetadataClient>(Metadata);
+            services.AddSingleton<GameEnrichmentCoordinator>(); services.AddSingleton<GameEnrichmentPolicy>();
+            services.AddSingleton<GameEnrichmentCooldown>();
             services.AddScoped<IGameEnrichmentService, GameEnrichmentService>();
             Root = services.BuildServiceProvider(validateScopes: true);
-            Service = new GameEnrichmentService(Root.GetRequiredService<IServiceScopeFactory>(), Metadata, Clock);
+            Service = new GameEnrichmentService(Root.GetRequiredService<IServiceScopeFactory>(), Metadata, Clock,
+                Root.GetRequiredService<GameEnrichmentCoordinator>(), Root.GetRequiredService<GameEnrichmentPolicy>(), Root.GetRequiredService<GameEnrichmentCooldown>());
             using var db = Db(); db.Database.Migrate();
         }
         public NextGameAiDbContext Db() => new(new DbContextOptionsBuilder<NextGameAiDbContext>().UseSqlite(Connection).AddInterceptors(guard).Options);
@@ -77,6 +80,7 @@ public sealed class GameEnrichmentDetailsTests
     {
         using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichDurationAndMultiplayerAsync(id);
         var before = await f.Snapshot("GameTimeToBeats", "GameMultiplayerModes", "CatalogPlatforms");
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = external => Good(external) with
         {
             TimeToBeat = new(IgdbMetadataStatus.TransportFailure, Failure: IgdbQueryFailure.RateLimited,
@@ -127,6 +131,7 @@ public sealed class GameEnrichmentDetailsTests
     {
         using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichDurationAndMultiplayerAsync(id);
         int modeId; using (var db = f.Db()) modeId = (await db.GameMultiplayerModes.SingleAsync()).Id;
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with
         {
             TimeToBeat = new(IgdbMetadataStatus.Success, new(500, game, null, null, 0, null)),
@@ -148,6 +153,7 @@ public sealed class GameEnrichmentDetailsTests
     {
         using var f = new Fixture(); var first = await f.Game(); var other = await f.Game(132181);
         await f.Service.EnrichDurationAndMultiplayerAsync(first); await f.Service.EnrichDurationAndMultiplayerAsync(other);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with { Multiplayer = Multi(Mode(game) with { Platform = new(6, "Synthetic renamed") }, Mode(game, 48), Mode(game, 167)) };
         await f.Service.EnrichDurationAndMultiplayerAsync(first);
         using var db = f.Db(); Assert.Equal(3, await db.CatalogPlatforms.CountAsync());
@@ -162,7 +168,9 @@ public sealed class GameEnrichmentDetailsTests
     {
         using var f = new Fixture(); var id = await f.Game(); f.Metadata.Response = game => Good(game) with { Multiplayer = Multi(Mode(game, null)) };
         await f.Service.EnrichDurationAndMultiplayerAsync(id);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         await f.Service.EnrichDurationAndMultiplayerAsync(id);
+        Assert.Equal(2, f.Metadata.Calls);
         using var db = f.Db(); Assert.Null((await db.GameMultiplayerModes.SingleAsync()).CatalogPlatformId);
         Assert.Empty(await db.CatalogPlatforms.ToListAsync()); Assert.Equal(6, await db.Platforms.CountAsync());
     }
@@ -173,6 +181,7 @@ public sealed class GameEnrichmentDetailsTests
         using var f = new Fixture(); var id = await f.Game();
         f.Metadata.Response = game => Good(game) with { Multiplayer = Multi(Mode(game, 6), Mode(game, 48)) };
         await f.Service.EnrichDurationAndMultiplayerAsync(id);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with { Multiplayer = Multi(Mode(game, 6) with { OnlineMax = 8 }) };
         await f.Service.EnrichDurationAndMultiplayerAsync(id);
         using var db = f.Db(); Assert.Equal(2, await db.GameMultiplayerModes.CountAsync()); Assert.Equal(2, await db.CatalogPlatforms.CountAsync());
@@ -186,7 +195,7 @@ public sealed class GameEnrichmentDetailsTests
     public async Task InvalidOrEmptyTimePreservesPreviousDataAndLastSuccess(string invalid)
     {
         using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichDurationAndMultiplayerAsync(id);
-        var before = await f.Snapshot("GameTimeToBeats"); f.Clock.Now = f.Clock.Now.AddHours(1);
+        var before = await f.Snapshot("GameTimeToBeats"); f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with { TimeToBeat = invalid switch
         {
             "failure" => new(IgdbMetadataStatus.TransportFailure, Failure: IgdbQueryFailure.Timeout),
@@ -201,7 +210,7 @@ public sealed class GameEnrichmentDetailsTests
         Assert.Equal(GameEnrichmentOutcome.Partial, r.Outcome); Assert.Equal(before, await f.Snapshot("GameTimeToBeats"));
         using var db = f.Db(); var state = await db.GameEnrichmentStates.SingleAsync(s => s.Section == CatalogMetadataSection.TimeToBeat);
         Assert.Equal(CatalogUpdateResult.TemporaryFailure, state.LastResult);
-        Assert.Equal(f.Clock.Now.AddHours(-1).UtcDateTime, state.LastSuccessAtUtc); Assert.Equal(f.Clock.Now.UtcDateTime, state.LastAttemptAtUtc);
+        Assert.Equal(f.Clock.Now.AddDays(-30).UtcDateTime, state.LastSuccessAtUtc); Assert.Equal(f.Clock.Now.UtcDateTime, state.LastAttemptAtUtc);
     }
 
     [Theory]
@@ -211,6 +220,7 @@ public sealed class GameEnrichmentDetailsTests
         using var f = new Fixture(); var id = await f.Game();
         if (existing) await f.Service.EnrichDurationAndMultiplayerAsync(id);
         var before = await f.Snapshot("GameTimeToBeats");
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with { TimeToBeat = new(IgdbMetadataStatus.Success, new(game, game, null, null, null, 5)) };
         var r = await f.Service.EnrichDurationAndMultiplayerAsync(id);
         Assert.Equal(TaxonomyEnrichmentOutcome.EmptyPreserved, r.Sections.Single(s => s.Section == CatalogMetadataSection.TimeToBeat).Outcome);
@@ -266,12 +276,12 @@ public sealed class GameEnrichmentDetailsTests
                     : invalid == "failure" ? new(IgdbMetadataStatus.InvalidResponse) : Multi(rows)
             };
         };
-        f.Clock.Now = f.Clock.Now.AddHours(1);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         var r = await f.Service.EnrichDurationAndMultiplayerAsync(id);
         Assert.Equal(GameEnrichmentOutcome.Partial, r.Outcome); Assert.Equal(before, await f.Snapshot("GameMultiplayerModes", "CatalogPlatforms"));
         using var db = f.Db(); Assert.Equal(2, (await db.GameTimeToBeats.SingleAsync()).NormallySeconds);
         var state = await db.GameEnrichmentStates.SingleAsync(s => s.Section == CatalogMetadataSection.Multiplayer);
-        Assert.Equal(CatalogUpdateResult.TemporaryFailure, state.LastResult); Assert.Equal(f.Clock.Now.AddHours(-1).UtcDateTime, state.LastSuccessAtUtc);
+        Assert.Equal(CatalogUpdateResult.TemporaryFailure, state.LastResult); Assert.Equal(f.Clock.Now.AddDays(-30).UtcDateTime, state.LastSuccessAtUtc);
     }
 
     [Theory]
@@ -280,6 +290,7 @@ public sealed class GameEnrichmentDetailsTests
     {
         using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichDurationAndMultiplayerAsync(id);
         var before = await f.Snapshot("GameMultiplayerModes", "CatalogPlatforms");
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with { Multiplayer = Multi(Mode(game, 167), conflict == "record-moved" ? Mode(game, 48, game * 10 + 6) : Mode(game, 6, 77)) };
         var r = await f.Service.EnrichDurationAndMultiplayerAsync(id);
         Assert.Equal(TaxonomyEnrichmentOutcome.InvalidResponse, r.Sections.Single(s => s.Section == CatalogMetadataSection.Multiplayer).Outcome);
@@ -291,6 +302,7 @@ public sealed class GameEnrichmentDetailsTests
     {
         using var f = new Fixture(); var first = await f.Game(); var other = await f.Game(132181);
         await f.Service.EnrichDurationAndMultiplayerAsync(first);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with { TimeToBeat = new(IgdbMetadataStatus.Success, new(974, game, 1, 2, 3, 4)), Multiplayer = Multi(Mode(game, 6, 9746)) };
         var before = await f.Snapshot("GameTimeToBeats", "GameMultiplayerModes", "CatalogPlatforms");
         var r = await f.Service.EnrichDurationAndMultiplayerAsync(other); Assert.Equal(GameEnrichmentOutcome.Preserved, r.Outcome);
@@ -308,6 +320,7 @@ public sealed class GameEnrichmentDetailsTests
         {
             cmd.CommandText = "CREATE TRIGGER FailMode BEFORE INSERT ON GameMultiplayerModes BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;"; cmd.ExecuteNonQuery();
         }
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with { TimeToBeat = new(IgdbMetadataStatus.Success, new(game, game, 1, 2, 3, 4)), Multiplayer = Multi(Mode(game, 48)) };
         var r = await f.Service.EnrichDurationAndMultiplayerAsync(id); Assert.Equal(GameEnrichmentOutcome.PersistenceFailure, r.Outcome);
         Assert.Empty(r.Sections); Assert.Equal(before, await f.Snapshot("GameTimeToBeats", "GameMultiplayerModes", "CatalogPlatforms", "GameEnrichmentStates"));
@@ -347,7 +360,7 @@ public sealed class GameEnrichmentDetailsTests
         var previous = await f.Snapshot("GameMultiplayerModes", "CatalogPlatforms");
         GameEnrichmentState previousState;
         using (var db = f.Db()) previousState = await db.GameEnrichmentStates.AsNoTracking().SingleAsync(s => s.Section == CatalogMetadataSection.Multiplayer);
-        f.Clock.Now = f.Clock.Now.AddDays(1);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = game => Good(game) with { Multiplayer = new(IgdbMetadataStatus.NotRequested), TimeToBeat = new(IgdbMetadataStatus.Success, new(game, game, 1, 2, 3, 4)) };
         var r = await f.Service.EnrichDurationAndMultiplayerAsync(id);
         Assert.Equal(CatalogMetadataSection.TimeToBeat, Assert.Single(r.Sections).Section);

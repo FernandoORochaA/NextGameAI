@@ -86,3 +86,37 @@ O limite de 1.024 entradas, limpeza oportunista, marcas de sucesso por 24 horas 
 após reinício/evicção continuam válidos. Ordenação de resultados atrasados depende da marca
 em memória ainda retida; após sua perda não há histórico durável de sequências.
 O scheduler continua independente e inalterado. Nenhum retry HTTP ou SQLite foi criado.
+
+## Integração 4B.5C.3
+
+Os dois métodos públicos de `GameEnrichmentService` agora passam pelo mesmo núcleo coordenado.
+O lease de GameId é adquirido antes da leitura. Frescor e cooldown são avaliados por seção;
+somente seções elegíveis recebem identidade e entram em `GetSectionsAsync`. Sem seção elegível,
+não há chamada externa, bloqueio global, transação de escrita ou tentativa fictícia.
+
+O contexto de leitura é encerrado antes do cliente. A referência UTC é capturada depois que
+o cliente retorna ou entrega uma falha tipada. Ela também é o timestamp destinado ao estado
+persistido; observações ficam preparadas antes da espera pela escrita. Uma eventual classificação
+semântica inválida descoberta ao persistir é preparada com os mesmos instantes, sem novo HTTP.
+
+A ordem é jogo, escrita global e transação. Dentro da transação, identidade e estados são
+recarregados e reavaliados. Mudanças em existência, timestamps, resultado ou Source descartam
+a seção. A identidade é conferida novamente depois de SaveChanges. Um estado alterado e depois
+restaurado com todos os mesmos campos (ABA) não é distinguível pelo esquema atual; a coordenação
+impede isso nos caminhos normais da instância, mas não coordena processos externos.
+
+Uma transação cobre as seções autorizadas. EmptyPreserved mantém seu comportamento conservador.
+Somente depois de CommitAsync retornar com sucesso são publicadas as observações identificadas,
+antes de liberar o jogo. Cancelamento depois desse ponto não oculta o commit confirmado.
+Não há chamadas MVC automáticas nem alteração de dados pessoais.
+
+Falhas de escrita antes do commit encerram os recursos transacionais e registram somente o
+cooldown de persistência em memória. Cancelamento anterior ao commit propaga sem cooldown novo.
+Exceção/cancelamento durante CommitAsync retorna `CommitIndeterminate`: não presume sucesso,
+não publica observações e não repete a transação. O banco poderá precisar ser reavaliado em uma
+nova solicitação; não existe recibo durável de tentativa para resolver todos esses casos.
+
+Os resultados contêm decisões tipadas para recentes, cooldown, inconsistência, descarte e
+resultados confirmados. `Sections` continua contendo somente resultados efetivamente persistidos.
+Coordenador, cooldown, política e relógio mantêm os lifetimes existentes; não há retries SQLite,
+mudança de transporte/scheduler, migrations ou sincronização entre processos.

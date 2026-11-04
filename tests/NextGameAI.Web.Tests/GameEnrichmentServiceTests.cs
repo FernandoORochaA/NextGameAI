@@ -24,9 +24,9 @@ public sealed class GameEnrichmentServiceTests
         public int Calls;
         public Func<long, IgdbMetadataResult> Response = Good;
         public Action? Before;
-        public Task<IgdbMetadataResult> GetSectionsAsync(long id, IReadOnlyCollection<IgdbMetadataSectionKind> sections, CancellationToken ct = default) =>
-            throw new InvalidOperationException("Existing persistence still uses the complete query.");
-        public Task<IgdbMetadataResult> GetByIdAsync(long id, CancellationToken ct = default)
+        public Task<IgdbMetadataResult> GetByIdAsync(long id, CancellationToken ct = default) =>
+            throw new InvalidOperationException("Coordinated enrichment must use selective queries.");
+        public Task<IgdbMetadataResult> GetSectionsAsync(long id, IReadOnlyCollection<IgdbMetadataSectionKind> sections, CancellationToken ct = default)
         {
             Calls++; ct.ThrowIfCancellationRequested(); Before?.Invoke();
             return Task.FromResult(Response(id));
@@ -46,10 +46,13 @@ public sealed class GameEnrichmentServiceTests
             var services = new ServiceCollection();
             services.AddDbContext<NextGameAiDbContext>(o => o.UseSqlite(Connection).AddInterceptors(guard));
             services.AddSingleton<TimeProvider>(Clock); services.AddSingleton<IIgdbMetadataClient>(Metadata);
+            services.AddSingleton<GameEnrichmentCoordinator>(); services.AddSingleton<GameEnrichmentPolicy>();
+            services.AddSingleton<GameEnrichmentCooldown>();
             services.AddScoped<IGameEnrichmentService, GameEnrichmentService>();
             Root = services.BuildServiceProvider(validateScopes: true);
             // The operation uses scopes of its own; never saves a caller's pending context.
-            Service = new GameEnrichmentService(Root.GetRequiredService<IServiceScopeFactory>(), Metadata, Clock);
+            Service = new GameEnrichmentService(Root.GetRequiredService<IServiceScopeFactory>(), Metadata, Clock,
+                Root.GetRequiredService<GameEnrichmentCoordinator>(), Root.GetRequiredService<GameEnrichmentPolicy>(), Root.GetRequiredService<GameEnrichmentCooldown>());
             using var db = Db(); db.Database.Migrate();
         }
         public NextGameAiDbContext Db() => new(new DbContextOptionsBuilder<NextGameAiDbContext>()
@@ -83,7 +86,7 @@ public sealed class GameEnrichmentServiceTests
     {
         using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichTaxonomiesAsync(id);
         var before = await f.Snapshot("Games", "GameTaxonomies", "CatalogTaxonomies", "LibraryEntries", "GameOwnerships");
-        f.Clock.Now = f.Clock.Now.AddDays(1);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = external => throws
             ? throw new IgdbQueryException(IgdbQueryFailure.RateLimited, System.Net.HttpStatusCode.TooManyRequests, TimeSpan.FromHours(2))
             : Good(external) with { Genres = new(IgdbMetadataStatus.TransportFailure, Failure: IgdbQueryFailure.RateLimited,
@@ -93,7 +96,7 @@ public sealed class GameEnrichmentServiceTests
         Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, genre.StatusCode); Assert.Equal(TimeSpan.FromHours(2), genre.RetryAfter);
         Assert.Equal(before, await f.Snapshot("Games", "GameTaxonomies", "CatalogTaxonomies", "LibraryEntries", "GameOwnerships"));
         using var db = f.Db(); var state = await db.GameEnrichmentStates.SingleAsync(s => s.Section == CatalogMetadataSection.Genres);
-        Assert.Equal(f.Clock.Now.UtcDateTime.AddDays(-1), state.LastSuccessAtUtc);
+        Assert.Equal(f.Clock.Now.UtcDateTime.AddDays(-30), state.LastSuccessAtUtc);
         Assert.Equal(CatalogUpdateResult.TemporaryFailure, state.LastResult);
     }
 
@@ -131,9 +134,11 @@ public sealed class GameEnrichmentServiceTests
     {
         using var f = new Fixture(); var original = await f.Game(); var remake = await f.Game(132181);
         await f.Service.EnrichTaxonomiesAsync(original); await f.Service.EnrichTaxonomiesAsync(remake);
-        var before = await f.Snapshot("CatalogTaxonomies", "GameTaxonomies", "GameEnrichmentStates");
+        var before = await f.Snapshot("CatalogTaxonomies", "GameTaxonomies");
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         await f.Service.EnrichTaxonomiesAsync(original);
-        Assert.Equal(before, await f.Snapshot("CatalogTaxonomies", "GameTaxonomies", "GameEnrichmentStates"));
+        Assert.Equal(before, await f.Snapshot("CatalogTaxonomies", "GameTaxonomies"));
+        Assert.Equal(3, f.Metadata.Calls);
         using var db = f.Db(); Assert.Equal(5, await db.CatalogTaxonomies.CountAsync()); Assert.Equal(10, await db.GameTaxonomies.CountAsync());
         Assert.Equal(new long?[] { 974, 132181 }, await db.Games.OrderBy(g => g.Id).Select(g => g.IgdbId).ToArrayAsync());
     }
@@ -143,6 +148,7 @@ public sealed class GameEnrichmentServiceTests
     {
         using var f = new Fixture(); var first = await f.Game(); var other = await f.Game(132181);
         await f.Service.EnrichTaxonomiesAsync(first); await f.Service.EnrichTaxonomiesAsync(other);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = id => Good(id) with
         {
             Genres = new(IgdbMetadataStatus.Success, Array.AsReadOnly(new[] { new IgdbTaxonomyResult(IgdbTaxonomyKind.Genre, 20, "Synthetic new") })),
@@ -165,13 +171,13 @@ public sealed class GameEnrichmentServiceTests
     public async Task FailedSectionPreservesContentAndLastSuccessWhileOtherSectionUpdates(IgdbMetadataStatus status)
     {
         using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichTaxonomiesAsync(id);
-        f.Clock.Now = f.Clock.Now.AddHours(1);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = external => Good(external) with { Genres = Error(status), Themes = Section(IgdbTaxonomyKind.Theme, 30) };
         var r = await f.Service.EnrichTaxonomiesAsync(id);
         Assert.Equal(GameEnrichmentOutcome.Partial, r.Outcome);
         using var db = f.Db(); var state = await db.GameEnrichmentStates.SingleAsync(s => s.Section == CatalogMetadataSection.Genres);
         Assert.Equal(status == IgdbMetadataStatus.GameNotFound ? CatalogUpdateResult.NotFound : CatalogUpdateResult.TemporaryFailure, state.LastResult);
-        Assert.Equal(f.Clock.Now.UtcDateTime, state.LastAttemptAtUtc); Assert.Equal(f.Clock.Now.AddHours(-1).UtcDateTime, state.LastSuccessAtUtc);
+        Assert.Equal(f.Clock.Now.UtcDateTime, state.LastAttemptAtUtc); Assert.Equal(f.Clock.Now.AddDays(-30).UtcDateTime, state.LastSuccessAtUtc);
         Assert.True(await db.GameTaxonomies.AnyAsync(l => l.CatalogTaxonomy.Kind == CatalogTaxonomyKind.Genre && l.CatalogTaxonomy.IgdbId == 10));
         Assert.True(await db.GameTaxonomies.AnyAsync(l => l.CatalogTaxonomy.Kind == CatalogTaxonomyKind.Theme && l.CatalogTaxonomy.IgdbId == 30));
         Assert.Equal(status, r.Sections.Single(s => s.Section == CatalogMetadataSection.Genres).ExternalStatus);
@@ -181,6 +187,7 @@ public sealed class GameEnrichmentServiceTests
     public async Task EmptyContractWithoutCompletenessEvidenceNeverDeletesOrClaimsSuccess()
     {
         using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichTaxonomiesAsync(id);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = external => Good(external) with { Genres = new(IgdbMetadataStatus.Empty, Array.AsReadOnly(Array.Empty<IgdbTaxonomyResult>())) };
         var r = await f.Service.EnrichTaxonomiesAsync(id);
         Assert.Equal(TaxonomyEnrichmentOutcome.EmptyPreserved, r.Sections.Single(s => s.Section == CatalogMetadataSection.Genres).Outcome);
@@ -210,6 +217,7 @@ public sealed class GameEnrichmentServiceTests
         var section = new IgdbMetadataSection<IReadOnlyList<IgdbTaxonomyResult>>(IgdbMetadataStatus.Success,
             invalid == "null" ? null : invalid == "success-empty" ? Array.Empty<IgdbTaxonomyResult>() : rows,
             invalid == "contradiction" ? IgdbQueryFailure.InvalidResponse : null);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = external => Good(external) with { Genres = section };
         var result = await f.Service.EnrichTaxonomiesAsync(id);
         Assert.Equal(TaxonomyEnrichmentOutcome.InvalidResponse, result.Sections.Single(s => s.Section == CatalogMetadataSection.Genres).Outcome);
@@ -248,7 +256,7 @@ public sealed class GameEnrichmentServiceTests
             command.CommandText = "CREATE TRIGGER FailState BEFORE UPDATE ON GameEnrichmentStates WHEN NEW.Section=4 BEGIN SELECT RAISE(ABORT,'synthetic failure'); END;";
             command.ExecuteNonQuery();
         }
-        f.Clock.Now = f.Clock.Now.AddHours(1);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = external => Good(external) with { Genres = Section(IgdbTaxonomyKind.Genre, 20) };
         var r = await f.Service.EnrichTaxonomiesAsync(id);
         Assert.Equal(GameEnrichmentOutcome.PersistenceFailure, r.Outcome); Assert.Empty(r.Sections);
@@ -293,7 +301,7 @@ public sealed class GameEnrichmentServiceTests
         using var f = new Fixture(); var id = await f.Game(); await f.Service.EnrichTaxonomiesAsync(id);
         GameEnrichmentState previous;
         using (var db = f.Db()) previous = await db.GameEnrichmentStates.AsNoTracking().SingleAsync(s => s.Section == CatalogMetadataSection.Genres);
-        f.Clock.Now = f.Clock.Now.AddDays(1);
+        f.Clock.Now = f.Clock.Now.AddDays(30);
         f.Metadata.Response = external => Good(external) with { Genres = new(IgdbMetadataStatus.NotRequested) };
         var r = await f.Service.EnrichTaxonomiesAsync(id);
         Assert.DoesNotContain(r.Sections, s => s.Section == CatalogMetadataSection.Genres);
