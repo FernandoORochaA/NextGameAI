@@ -3,8 +3,14 @@ using NextGameAI.Web.Data;
 using NextGameAI.Web.Services;
 using NextGameAI.Web.Services.Igdb;
 using System.Threading.RateLimiting;
+using NextGameAI.Web.VisualDevelopment;
 
+VisualEnvironment.ValidateLaunch(args, Environment.GetEnvironmentVariable("NEXTGAMEAI_VISUAL_PROFILE"),
+    Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"), Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"));
 var builder = WebApplication.CreateBuilder(args);
+var visual = builder.Environment.IsEnvironment(VisualEnvironment.Name);
+var visualDatabase = visual ? VisualEnvironment.Configure(builder.Environment.EnvironmentName, builder.Configuration,
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)) : null;
 
 // Add services to the container.
 builder.Services.AddControllersWithViews(options =>
@@ -15,13 +21,18 @@ builder.Services.AddControllersWithViews(options =>
     messages.SetValueMustBeANumberAccessor(field => $"O campo {field} deve ser numérico.");
     messages.SetUnknownValueIsInvalidAccessor(field => $"O valor informado para {field} é inválido.");
 });
-builder.Services.AddDbContext<NextGameAiDbContext>(options => options.UseSqlite(
-    builder.Configuration.GetConnectionString("Library") ??
-    $"Data Source={Path.Combine(builder.Environment.ContentRootPath, "nextgameai.db")};Foreign Keys=True"));
+builder.Services.AddDbContext<NextGameAiDbContext>(options =>
+{
+    if (visualDatabase is not null)
+        options.UseSqlite(visualDatabase.ConnectionString).AddInterceptors(visualDatabase);
+    else options.UseSqlite(builder.Configuration.GetConnectionString("Library") ??
+        $"Data Source={Path.Combine(builder.Environment.ContentRootPath, "nextgameai.db")};Foreign Keys=True");
+});
 builder.Services.AddScoped<CurrentUserProfile>();
 builder.Services.AddScoped<LibraryService>();
 builder.Services.AddIgdbAuthentication(builder.Configuration);
 builder.Services.AddIgdbSearch();
+if (visual) VisualEnvironment.AddHttpBarrier(builder.Services);
 builder.Services.AddRateLimiter(options =>
 {
     // One bounded bucket for the single-user local MVP; no unbounded per-IP state.
@@ -53,7 +64,11 @@ if (app.Environment.IsDevelopment())
 }
 
 // Configure the HTTP request pipeline.
-if (!app.Environment.IsDevelopment())
+if (visual)
+{
+    app.UseDeveloperExceptionPage(); // Local visual debugging; never applied to other environments.
+}
+else if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Home/Error");
     // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
