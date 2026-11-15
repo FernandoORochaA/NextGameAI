@@ -7,7 +7,7 @@ using Microsoft.Win32.SafeHandles;
 namespace NextGameAI.Web.VisualDevelopment;
 
 // Windows-only, deliberately limited to this application's one visual database.
-public sealed class VisualDatabaseGuard : DbConnectionInterceptor
+public sealed partial class VisualDatabaseGuard : DbConnectionInterceptor
 {
     public const string FileName = "nextgameai.visual.db";
     public const string PreparationVersion = "NextGameAI.Visual/1/20261024220151_AddCatalogEnrichmentMetadata";

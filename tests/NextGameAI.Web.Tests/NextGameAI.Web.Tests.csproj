@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\NextGameAI.Web\NextGameAI.Web.csproj" />
+    <ProjectReference Include="..\..\tools\NextGameAI.VisualSetup\NextGameAI.VisualSetup.csproj" />
   </ItemGroup>
 
 </Project>

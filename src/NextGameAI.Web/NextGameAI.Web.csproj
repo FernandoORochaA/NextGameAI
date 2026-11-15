@@ -15,4 +15,7 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.13" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="NextGameAI.VisualSetup" />
+  </ItemGroup>
 </Project>
