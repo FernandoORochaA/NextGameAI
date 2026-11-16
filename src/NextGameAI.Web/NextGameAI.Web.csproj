@@ -17,5 +17,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="NextGameAI.VisualSetup" />
+    <InternalsVisibleTo Include="NextGameAI.Web.Tests" />
   </ItemGroup>
 </Project>

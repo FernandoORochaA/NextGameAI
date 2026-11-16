@@ -19,32 +19,59 @@ public sealed class VisualDatabasePreparer
 
     public static async Task RunAsync(string[] args, CancellationToken cancellationToken = default)
     {
-        ValidateIntent(args, Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"),
-            Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"));
-        cancellationToken.ThrowIfCancellationRequested();
-        // No host, configuration discovery, secrets, HTTP registrations or MVC entry point.
-        var guard = new VisualDatabaseGuard(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
-        Console.WriteLine("Preparação exclusivamente sintética: NextGameAI/VisualDevelopment/nextgameai.visual.db sob os dados locais. Sem sobrescrita.");
-        await new VisualDatabasePreparer(guard, TimeProvider.System, (stage, _) =>
-        { if (stage != PreparationStage.MigrationSql) Console.WriteLine($"Etapa: {stage}"); return Task.CompletedTask; }).PrepareAsync(cancellationToken);
+        await RunOperationAsync(args, Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"),
+            Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+            () => new VisualDatabaseGuard(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)),
+            Console.Out, cancellationToken);
+    }
+
+    internal static async Task RunOperationAsync(string[] args, string? dotnet, string? aspnet,
+        Func<VisualDatabaseGuard> guardFactory, TextWriter output, CancellationToken ct,
+        Func<string, long>? availableSpace = null)
+    {
+        ValidateIntent(args, dotnet, aspnet);
+        ct.ThrowIfCancellationRequested();
+        await output.WriteLineAsync("Ambiente: VisualDevelopment válido.");
+        var guard = guardFactory(); // Resolved only after intent validation. Never loads host/configuration/secrets.
+        await output.WriteLineAsync($"Destino: {guard.DatabasePath}");
+        if (args[0] == "check-synthetic")
+        {
+            var result = guard.CheckPreparation(availableSpace);
+            await output.WriteLineAsync("Armazenamento: local fixo; ancestrais existentes validados.");
+            await output.WriteLineAsync(result.MissingDirectories
+                ? "Diretórios: ausentes, criáveis em princípio; nenhuma criação realizada."
+                : "Diretórios: existentes e válidos.");
+            await output.WriteLineAsync($"Espaço disponível: {result.AvailableBytes} bytes (sem garantia de suficiência futura).");
+            await output.WriteLineAsync("A pré-checagem não reserva o destino, não garante permissões de escrita e não autoriza preparação. Todas as guardas serão repetidas.");
+            if (result.Conflicts.Length != 0)
+                throw new OperationalFailure("Conflitos: " + string.Join(", ", result.Conflicts) + ". Nenhum artefato foi alterado.");
+            ct.ThrowIfCancellationRequested();
+            await output.WriteLineAsync("Condições preliminares satisfeitas; nenhum conflito identificado.");
+            return;
+        }
+        await new VisualDatabasePreparer(guard, TimeProvider.System, async (stage, _) =>
+        { if (stage != PreparationStage.MigrationSql) await output.WriteLineAsync($"Etapa: {stage}"); }).PrepareAsync(ct);
     }
 
     internal static void ValidateIntent(string[] args, string? dotnet, string? aspnet)
     {
-        if (!args.SequenceEqual(new[] { "prepare-synthetic", "--confirm-synthetic-only" }) ||
-            dotnet != VisualEnvironment.Name || aspnet != VisualEnvironment.Name)
-            throw new InvalidOperationException("Exige intenção sintética explícita e ambiente visual. Caminhos e opções adicionais não são aceitos.");
+        if (dotnet != VisualEnvironment.Name || aspnet != VisualEnvironment.Name)
+            throw new OperationalFailure("Ambiente inválido: DOTNET_ENVIRONMENT e ASPNETCORE_ENVIRONMENT devem ser VisualDevelopment.");
+        if (!args.SequenceEqual(new[] { "prepare-synthetic", "--confirm-synthetic-only" }) &&
+            !args.SequenceEqual(new[] { "check-synthetic" }))
+            throw new OperationalFailure("Argumentos inválidos. Use check-synthetic ou prepare-synthetic --confirm-synthetic-only; opções adicionais são recusadas.");
     }
 
     internal static VisualDatabasePreparer ForTests(string root, TimeProvider clock,
-        Func<PreparationStage, CancellationToken, Task>? observe = null)
+        Func<PreparationStage, CancellationToken, Task>? observe = null,
+        Action<VisualDatabaseGuard.PublicationPoint>? publicationProbe = null)
     {
         var full = Path.GetFullPath(root);
         var temporary = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath())) + Path.DirectorySeparatorChar;
         if (!Path.IsPathFullyQualified(root) || !full.StartsWith(temporary, StringComparison.OrdinalIgnoreCase) ||
             !Path.GetFileName(full).StartsWith("NextGameAI-setup-test-", StringComparison.Ordinal) ||
             !Directory.Exists(full)) throw new InvalidOperationException("Somente raiz temporária sintética exclusiva.");
-        return new(new VisualDatabaseGuard(full), clock, observe);
+        return new(new VisualDatabaseGuard(full) { PublicationProbe = publicationProbe }, clock, observe);
     }
 
     internal async Task PrepareAsync(CancellationToken ct = default)

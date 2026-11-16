@@ -146,14 +146,14 @@ public sealed class VisualDatabasePreparerTests
     [Theory]
     [InlineData("Development")] [InlineData("Production")] [InlineData("Testing")] [InlineData("")]
     public void OtherEnvironmentsAreRejectedBeforeDestinationIsResolved(string environment) =>
-        Assert.Throws<InvalidOperationException>(() => VisualDatabasePreparer.ValidateIntent(
+        Assert.ThrowsAny<InvalidOperationException>(() => VisualDatabasePreparer.ValidateIntent(
             ["prepare-synthetic", "--confirm-synthetic-only"], environment, environment));
 
     [Theory]
     [InlineData("")] [InlineData("prepare-synthetic")] [InlineData("prepare-synthetic --confirm-synthetic-only --path=forbidden")]
     [InlineData("reset --confirm-synthetic-only")]
     public void MissingConfirmationAndExtraArgumentsCannotSelectAnotherDestination(string input) =>
-        Assert.Throws<InvalidOperationException>(() => VisualDatabasePreparer.ValidateIntent(input.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+        Assert.ThrowsAny<InvalidOperationException>(() => VisualDatabasePreparer.ValidateIntent(input.Split(' ', StringSplitOptions.RemoveEmptyEntries),
             VisualEnvironment.Name, VisualEnvironment.Name));
 
     [Theory]
@@ -215,6 +215,7 @@ public sealed class VisualDatabasePreparerTests
         try
         {
             Assert.Equal(0, process.ExitCode);
+            Assert.Throws<InvalidOperationException>(() => s.Guard.CheckPreparation());
             await Assert.ThrowsAsync<InvalidOperationException>(() => s.Preparer().PrepareAsync());
             Assert.Empty(Directory.EnumerateFileSystemEntries(target));
         }
@@ -229,4 +230,226 @@ public sealed class VisualDatabasePreparerTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => s.Preparer().PrepareAsync());
         Assert.Equal("synthetic-sentinel", await File.ReadAllTextAsync(file));
     }
+
+    private static Task<int> Entry(Sandbox s, string[] args, StringWriter output, StringWriter error,
+        CancellationToken ct = default, Func<string, long>? space = null) =>
+        VisualSetupEntry.ExecuteAsync(args, VisualEnvironment.Name, VisualEnvironment.Name,
+            () => s.Guard, output, error, ct, space);
+
+    [Fact]
+    public async Task CheckUsesAbsoluteFixedDestinationWithoutCreatingAnything()
+    {
+        using var s = new Sandbox(); using var output = new StringWriter(); using var error = new StringWriter();
+        Assert.Equal(0, await Entry(s, ["check-synthetic"], output, error));
+        Assert.Contains(s.Guard.DatabasePath, output.ToString());
+        Assert.Contains("não reserva", output.ToString()); Assert.Contains("Espaço disponível", output.ToString());
+        Assert.Contains("ausentes", output.ToString()); Assert.Empty(error.ToString());
+        Assert.Empty(Directory.EnumerateFileSystemEntries(s.Root));
+    }
+
+    [Theory]
+    [InlineData("")] [InlineData(".ready")] [InlineData(".ready.pending")]
+    [InlineData("-wal")] [InlineData("-shm")] [InlineData("-journal")]
+    public async Task CheckDetectsEveryArtifactWithoutOpeningSqliteOrChangingBytes(string suffix)
+    {
+        using var s = new Sandbox(); Directory.CreateDirectory(Path.GetDirectoryName(s.Guard.DatabasePath)!);
+        var path = s.Guard.DatabasePath + suffix; byte[] bytes = [17, 23, 91];
+        await File.WriteAllBytesAsync(path, bytes);
+        var files = Directory.GetFileSystemEntries(s.Root, "*", SearchOption.AllDirectories);
+        using var output = new StringWriter(); using var error = new StringWriter();
+        Assert.Equal(1, await Entry(s, ["check-synthetic"], output, error));
+        Assert.Contains("Conflitos", error.ToString());
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
+        Assert.Equal(files, Directory.GetFileSystemEntries(s.Root, "*", SearchOption.AllDirectories));
+    }
+
+    [Theory]
+    [InlineData("", "VisualDevelopment", "VisualDevelopment")]
+    [InlineData("check-synthetic extra", "VisualDevelopment", "VisualDevelopment")]
+    [InlineData("check-synthetic --confirm-synthetic-only", "VisualDevelopment", "VisualDevelopment")]
+    [InlineData("prepare-synthetic", "VisualDevelopment", "VisualDevelopment")]
+    [InlineData("reset", "VisualDevelopment", "VisualDevelopment")]
+    [InlineData("check-synthetic --path=forbidden", "VisualDevelopment", "VisualDevelopment")]
+    [InlineData("check-synthetic prepare-synthetic", "VisualDevelopment", "VisualDevelopment")]
+    [InlineData("prepare-synthetic --confirm-synthetic-only --overwrite", "VisualDevelopment", "VisualDevelopment")]
+    [InlineData("check-synthetic", null, null)]
+    [InlineData("check-synthetic", "Development", "Development")]
+    [InlineData("check-synthetic", "VisualDevelopment", "Development")]
+    [InlineData("check-synthetic", "Development", "VisualDevelopment")]
+    public async Task EntryRejectsInvalidIntentBeforeResolvingAnyDestination(string input, string? dotnet, string? aspnet)
+    {
+        var calls = 0; using var output = new StringWriter(); using var error = new StringWriter();
+        var code = await VisualSetupEntry.ExecuteAsync(input.Split(' ', StringSplitOptions.RemoveEmptyEntries), dotnet, aspnet,
+            () => { calls++; throw new Exception("must not resolve"); }, output, error);
+        Assert.Equal(1, code); Assert.Equal(0, calls); Assert.Empty(output.ToString());
+        Assert.Contains(dotnet != VisualEnvironment.Name || aspnet != VisualEnvironment.Name ? "Ambiente inválido" : "Argumentos inválidos", error.ToString());
+    }
+
+    [Fact]
+    public async Task EntryCancellationReturnsTwoBeforeResolvingDestination()
+    {
+        using var ct = new CancellationTokenSource(); ct.Cancel();
+        using var output = new StringWriter(); using var error = new StringWriter();
+        Assert.Equal(2, await VisualSetupEntry.ExecuteAsync(["check-synthetic"], VisualEnvironment.Name, VisualEnvironment.Name,
+            () => throw new Exception("must not resolve"), output, error, ct.Token));
+        Assert.Contains("cancelada", error.ToString());
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(-1)] [InlineData(1)]
+    public async Task CheckRefusesUnavailableOrUnqueryableSpaceWithoutWriting(int mode)
+    {
+        using var s = new Sandbox(); using var output = new StringWriter(); using var error = new StringWriter();
+        Assert.Equal(1, await Entry(s, ["check-synthetic"], output, error, space: _ => mode == 1 ? throw new IOException("sensitive raw error") : mode));
+        Assert.DoesNotContain("sensitive raw error", error.ToString());
+        Assert.Empty(Directory.EnumerateFileSystemEntries(s.Root));
+    }
+
+    [Theory]
+    [InlineData(4u)] [InlineData(0u)]
+    public void CheckCannotUseRemoteOrIndeterminateStorage(uint type)
+    {
+        using var s = new Sandbox();
+        Assert.Throws<InvalidOperationException>(() => new VisualDatabaseGuard(s.Root, _ => type));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(s.Root));
+    }
+
+    [Fact]
+    public void CheckRejectsUnreadableMetadataAndNonDirectoryAncestorWithoutWriting()
+    {
+        using var s = new Sandbox();
+        var file = Path.Combine(s.Root, "NextGameAI"); File.WriteAllText(file, "sentinel");
+        Assert.Throws<InvalidOperationException>(() => s.Guard.CheckPreparation());
+        Assert.Equal("sentinel", File.ReadAllText(file)); Assert.Single(Directory.GetFileSystemEntries(s.Root));
+        // A deleted synthetic OS root is indeterminate, never treated as a creatable root.
+        File.Delete(file); Directory.Delete(s.Root);
+        try { Assert.ThrowsAny<IOException>(() => s.Guard.CheckPreparation()); }
+        finally { Directory.CreateDirectory(s.Root); }
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)] [InlineData(4)]
+    public async Task InternalPublicationFailuresDoNotLeaveAValidFinalMarker(int value)
+    {
+        using var s = new Sandbox(); var point = (VisualDatabaseGuard.PublicationPoint)value;
+        await Assert.ThrowsAsync<IOException>(() => VisualDatabasePreparer.ForTests(s.Root, new Clock(),
+            publicationProbe: p => { if (p == point) throw new IOException("synthetic fault"); }).PrepareAsync());
+        Assert.False(File.Exists(s.Guard.DatabasePath + ".ready"));
+        Assert.Throws<InvalidOperationException>(() => s.Guard.RequirePrepared());
+        Assert.Equal(point is VisualDatabaseGuard.PublicationPoint.Write or VisualDatabaseGuard.PublicationPoint.Flush or VisualDatabaseGuard.PublicationPoint.Move,
+            File.Exists(s.Guard.DatabasePath + ".ready.pending"));
+        using var exclusive = new FileStream(s.Guard.DatabasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    }
+
+    [Fact]
+    public async Task LateFinalMarkerConflictIsNeverOverwritten()
+    {
+        using var s = new Sandbox(); var marker = s.Guard.DatabasePath + ".ready";
+        await Assert.ThrowsAsync<IOException>(() => VisualDatabasePreparer.ForTests(s.Root, new Clock(), publicationProbe: p =>
+        { if (p == VisualDatabaseGuard.PublicationPoint.Move) File.WriteAllText(marker, "unknown-owner"); }).PrepareAsync());
+        Assert.Equal("unknown-owner", File.ReadAllText(marker)); Assert.True(File.Exists(marker + ".pending"));
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task CancellationAtMoveBoundaryRespectsCommitPoint(bool afterMove)
+    {
+        using var s = new Sandbox(); using var ct = new CancellationTokenSource();
+        var prep = VisualDatabasePreparer.ForTests(s.Root, new Clock(), publicationProbe: p =>
+        { if (p == (afterMove ? VisualDatabaseGuard.PublicationPoint.Validate : VisualDatabaseGuard.PublicationPoint.Move)) ct.Cancel(); });
+        if (afterMove) { await prep.PrepareAsync(ct.Token); s.Guard.RequirePrepared(); }
+        else { await Assert.ThrowsAnyAsync<OperationCanceledException>(() => prep.PrepareAsync(ct.Token)); Assert.False(File.Exists(s.Guard.DatabasePath + ".ready")); }
+    }
+
+    [Fact]
+    public async Task ActualPostMoveValidationFailureRemovesOnlyOwnedMarker()
+    {
+        using var s = new Sandbox();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => VisualDatabasePreparer.ForTests(s.Root, new Clock(), publicationProbe: p =>
+        { if (p == VisualDatabaseGuard.PublicationPoint.Validate) File.AppendAllText(s.Guard.DatabasePath + ".ready", "invalid"); }).PrepareAsync());
+        Assert.False(File.Exists(s.Guard.DatabasePath + ".ready")); Assert.True(File.Exists(s.Guard.DatabasePath));
+    }
+
+    [Fact]
+    public async Task ReplacedMarkerAfterMoveIsPreservedOnValidationFailure()
+    {
+        using var s = new Sandbox(); var marker = s.Guard.DatabasePath + ".ready";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => VisualDatabasePreparer.ForTests(s.Root, new Clock(), publicationProbe: p =>
+        {
+            if (p != VisualDatabaseGuard.PublicationPoint.Validate) return;
+            File.Move(marker, Path.Combine(s.Root, "owned-marker")); File.WriteAllText(marker, "unknown replacement");
+        }).PrepareAsync());
+        Assert.Equal("unknown replacement", File.ReadAllText(marker));
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task PartialWriteAndFlushFailuresRetainPendingAndCloseItsHandle(bool flush)
+    {
+        using var s = new Sandbox(); using var output = new StringWriter(); using var error = new StringWriter();
+        s.Guard.PendingStreamProbe = (point, stream) =>
+        {
+            if (!flush && point == VisualDatabaseGuard.PublicationPoint.Write)
+            { stream.WriteByte(42); throw new IOException("synthetic partial write"); }
+            if (flush && point == VisualDatabaseGuard.PublicationPoint.Flush)
+            { stream.Dispose(); } // Actual Flush(true) then fails on the disposed owned stream.
+        };
+        Assert.Equal(1, await Entry(s, ["prepare-synthetic", "--confirm-synthetic-only"], output, error));
+        Assert.False(File.Exists(s.Guard.DatabasePath + ".ready"));
+        using var pending = new FileStream(s.Guard.DatabasePath + ".ready.pending", FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Assert.True(pending.Length > 0);
+        if (!flush) Assert.Equal(42, pending.ReadByte());
+    }
+
+    [Fact]
+    public async Task PendingCreationRaceFailsActualCreateNewWithoutOverwrite()
+    {
+        using var s = new Sandbox(); var pending = s.Guard.DatabasePath + ".ready.pending";
+        await Assert.ThrowsAsync<IOException>(() => VisualDatabasePreparer.ForTests(s.Root, new Clock(), publicationProbe: p =>
+        { if (p == VisualDatabaseGuard.PublicationPoint.CreatePending) File.WriteAllText(pending, "unknown-owner"); }).PrepareAsync());
+        Assert.Equal("unknown-owner", File.ReadAllText(pending)); Assert.False(File.Exists(s.Guard.DatabasePath + ".ready"));
+    }
+
+    [Fact]
+    public void CheckRejectsHardLinkedArtifactWithoutChangingIt()
+    {
+        using var s = new Sandbox(); Directory.CreateDirectory(Path.GetDirectoryName(s.Guard.DatabasePath)!);
+        var original = Path.Combine(s.Root, "owned-sentinel"); File.WriteAllText(original, "synthetic");
+        Assert.True(CreateSyntheticHardLink(s.Guard.DatabasePath, original, IntPtr.Zero));
+        Assert.Throws<InvalidOperationException>(() => s.Guard.CheckPreparation());
+        Assert.Equal("synthetic", File.ReadAllText(original));
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CreateSyntheticHardLink(string name, string existing, IntPtr security);
+
+    [Fact]
+    public async Task PermissionFailureDoesNotExposeRawDetails()
+    {
+        using var output = new StringWriter(); using var error = new StringWriter();
+        Assert.Equal(1, await VisualSetupEntry.ExecuteAsync(["check-synthetic"], VisualEnvironment.Name, VisualEnvironment.Name,
+            () => throw new UnauthorizedAccessException("sensitive details"), output, error));
+        Assert.Contains("Permissão insuficiente", error.ToString()); Assert.DoesNotContain("sensitive details", error.ToString());
+    }
+
+    private sealed class MissingFinalMessage : StringWriter
+    {
+        public override Task WriteLineAsync(string? value) => value == "Preparação sintética concluída e validada."
+            ? throw new IOException("synthetic output failure") : base.WriteLineAsync(value);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task ConsoleSuccessOrMissingFinalMessageDoesNotUndoPublication(bool failOutput)
+    {
+        using var s = new Sandbox(); using StringWriter output = failOutput ? new MissingFinalMessage() : new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(failOutput ? 1 : 0, await Entry(s, ["prepare-synthetic", "--confirm-synthetic-only"], output, error));
+        s.Guard.RequirePrepared();
+        var bytes = await File.ReadAllBytesAsync(s.Guard.DatabasePath);
+        Assert.Equal(1, await Entry(s, ["prepare-synthetic", "--confirm-synthetic-only"], new StringWriter(), new StringWriter()));
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(s.Guard.DatabasePath));
+    }
+
 }

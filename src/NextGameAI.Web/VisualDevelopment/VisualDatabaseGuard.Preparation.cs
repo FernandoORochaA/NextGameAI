@@ -9,6 +9,37 @@ namespace NextGameAI.Web.VisualDevelopment;
 
 public sealed partial class VisualDatabaseGuard
 {
+    internal enum PublicationPoint { CreatePending, Write, Flush, Move, Validate }
+
+    // Test-only observation points; never configured by command line or production configuration.
+    internal Action<PublicationPoint>? PublicationProbe { get; set; }
+    internal Action<PublicationPoint, FileStream>? PendingStreamProbe { get; set; }
+
+    internal (bool MissingDirectories, string[] Conflicts, long AvailableBytes) CheckPreparation(
+        Func<string, long>? availableSpace = null)
+    {
+        RequireFixedStorage();
+        var directory = Path.GetDirectoryName(DatabasePath)!;
+        var applicationDirectory = Path.GetDirectoryName(directory)!;
+        RejectReparseComponents(Path.GetDirectoryName(applicationDirectory)!);
+        foreach (var child in new[] { applicationDirectory, directory }) ValidateExistingDirectory(child);
+        var conflicts = new List<string>();
+        foreach (var suffix in PreparationSuffixes)
+        {
+            var path = DatabasePath + suffix;
+            try { _ = File.GetAttributes(path); }
+            catch (FileNotFoundException) { continue; }
+            catch (DirectoryNotFoundException) { continue; }
+            RejectReparseComponents(path);
+            _ = FileIdentity(path);
+            conflicts.Add(Path.GetFileName(path));
+        }
+        RequireFixedStorage();
+        var bytes = (availableSpace ?? (root => new DriveInfo(root).AvailableFreeSpace))(Path.GetPathRoot(DatabasePath)!);
+        if (bytes <= 0) throw new IOException("Espaço indisponível.");
+        return (!Directory.Exists(directory), conflicts.ToArray(), bytes);
+    }
+
     private static readonly string[] PreparationSuffixes = ["", ".ready", ".ready.pending", "-wal", "-shm", "-journal"];
 
     internal PreparationLease BeginPreparation()
@@ -95,15 +126,26 @@ public sealed partial class VisualDatabaseGuard
             var marker = guard.DatabasePath + ".ready";
             var pending = marker + ".pending";
             RequireAbsent(marker); RequireAbsent(pending);
+            guard.PublicationProbe?.Invoke(PublicationPoint.CreatePending);
             using (var file = new FileStream(pending, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                file.Write(Encoding.UTF8.GetBytes(markerContents)); file.Flush(flushToDisk: true);
+                guard.PublicationProbe?.Invoke(PublicationPoint.Write);
+                guard.PendingStreamProbe?.Invoke(PublicationPoint.Write, file);
+                file.Write(Encoding.UTF8.GetBytes(markerContents));
+                guard.PublicationProbe?.Invoke(PublicationPoint.Flush);
+                guard.PendingStreamProbe?.Invoke(PublicationPoint.Flush, file);
+                file.Flush(flushToDisk: true);
             }
             RejectReparseComponents(pending);
             var publishedIdentity = FileIdentity(pending);
+            guard.PublicationProbe?.Invoke(PublicationPoint.Move);
             Check(); cancellationToken.ThrowIfCancellationRequested();
             File.Move(pending, marker, overwrite: false); // Commit point; do not report late cancellation as rollback.
-            try { guard.RequirePrepared(); }
+            try
+            {
+                guard.PublicationProbe?.Invoke(PublicationPoint.Validate);
+                guard.RequirePrepared();
+            }
             catch
             {
                 // Remove only the marker this operation just published, never an unknown replacement.

@@ -146,3 +146,127 @@ auditoria automática. O console é ferramenta de desenvolvimento e não depend�
 de execução do MVC. As limitações Windows, aliases e substituição simultânea descritas
 acima continuam aplicáveis. Falhas são reportadas por etapa sem imprimir corpos,
 credenciais ou connection strings.
+
+## Operação controlada — 4C.3A.2B
+
+**A execução real continua sem autorização neste checkpoint**, inclusive a consulta
+`check-synthetic` no destino definitivo. Os comandos abaixo são referência futura.
+Não executar F5, MVC ou preparação antes da autorização específica posterior à auditoria.
+Nenhum perfil de preparação com confirmação salva é criado.
+
+### Sintaxe e pré-checagem
+
+As duas operações exigem exatamente `DOTNET_ENVIRONMENT=VisualDevelopment` e
+`ASPNETCORE_ENVIRONMENT=VisualDevelopment`, inclusive quando executadas fora do Visual Studio:
+
+- `check-synthetic`: consulta somente metadados e espaço disponível; não exige confirmação de escrita.
+- `prepare-synthetic --confirm-synthetic-only`: cria exclusivamente os dados sintéticos.
+
+Outras operações, argumentos adicionais, caminhos, connection strings, reset, sobrescrita
+e combinações de operações são recusados antes de resolver o destino. Não existe parâmetro
+público de raiz alternativa. A entrada interna de testes permanece restrita à área temporária.
+
+A pré-checagem deriva e mostra o caminho absoluto sob LocalApplicationData, exige armazenamento
+local fixo, valida os ancestrais existentes e reconhece os seis conflitos: banco, `.ready`,
+`.ready.pending`, `-wal`, `-shm` e `-journal`. Artefatos existentes passam pelas verificações
+reais de reparse points e identidade/hard links. Diretórios ausentes são informados sem criação.
+Uma inspeção recusada, espaço não consultável ou não positivo impede conclusão bem-sucedida.
+
+Não há abertura de SQLite, leitura de conteúdo do banco, migration, publicação, reserva,
+limpeza ou alteração de permissões durante `check-synthetic`. São reutilizadas as verificações
+da guarda, sem uma segunda implementação de segurança. A disponibilidade de bytes é uma
+fotografia informativa: não estabelece um tamanho mínimo garantido para a preparação.
+
+**A pré-checagem não autoriza preparar, não reserva o destino e não garante permissões futuras
+de escrita. Todas as guardas são executadas novamente durante a preparação.**
+
+### Referência de execução futura — não executar agora
+
+Após autorização própria, usar uma sessão PowerShell dedicada na raiz do repositório,
+com a solução já compilada e validada. Não reutilizar essa sessão para iniciar o MVC:
+
+```powershell
+$env:DOTNET_ENVIRONMENT = 'VisualDevelopment'
+$env:ASPNETCORE_ENVIRONMENT = 'VisualDevelopment'
+
+dotnet run --project .\tools\NextGameAI.VisualSetup\NextGameAI.VisualSetup.csproj --no-build --no-restore --no-launch-profile -- check-synthetic
+$LASTEXITCODE
+```
+
+Somente após autorização explícita de preparação, o comando de escrita seria:
+
+```powershell
+dotnet run --project .\tools\NextGameAI.VisualSetup\NextGameAI.VisualSetup.csproj --no-build --no-restore --no-launch-profile -- prepare-synthetic --confirm-synthetic-only
+$LASTEXITCODE
+```
+
+A confirmação exigida é o argumento literal; não existe pergunta interativa. Fechar a sessão
+após o procedimento evita herdar o ambiente visual em outras execuções. Não é necessário
+alterar o projeto de inicialização do Visual Studio para usar esses comandos.
+
+### Mensagens e códigos
+
+O destino absoluto é mostrado antes de qualquer criação. O console não grava logs próprios,
+não imprime connection strings, credenciais, exceções completas ou User Secrets.
+
+- `0`: operação concluída; em check, apenas condições preliminares satisfeitas.
+- `1`: argumentos/ambiente recusados, conflitos, acesso negado, E/S ou validação não confirmada.
+- `2`: cancelamento observado.
+
+As mensagens distinguem argumentos, ambientes, conflitos reconhecidos e permissão insuficiente.
+Falhas de E/S indicam resultado indeterminado; a última etapa exibida localiza uma eventual
+falha durante migrations, seed, verificação ou publicação. Erros de identidade/armazenamento
+são recusados sem expor detalhes internos. Nenhuma mensagem recomenda desativar guardas.
+
+### Publicação, interrupções e recuperação
+
+Antes do movimento para `.ready`, pode existir banco parcial ou `.ready.pending`, mas a operação
+ainda não publicou seu marcador final. Migrations não estão envolvidas em uma transação externa
+única; o seed possui transação própria. Falhas não autorizam retomar sobre o arquivo existente.
+
+O movimento exclusivo de `.ready.pending` para `.ready` é o ponto de publicação. Depois dele,
+um cancelamento tardio não representa rollback. A validação real `RequirePrepared` continua
+obrigatória; se falhar, somente o marcador com identidade comprovadamente pertencente à operação
+pode ser removido. Um marcador substituído por terceiros é preservado, assim como o banco.
+
+A preparação pode estar concluída mesmo se houver falha ao imprimir a mensagem final ou
+encerramento inesperado do processo. Ausência de confirmação, código desconhecido ou código `1`
+nessa situação exige inspeção independente. Não presumir que a operação pode ser repetida.
+
+Banco existente, marcador inválido/ausente, pendente ou auxiliares conflitantes exigem parar e
+preservar evidências. **Não apagar arquivos desconhecidos, fabricar marcador ou executar reset.**
+Qualquer recuperação destrutiva exige investigação e autorização próprias. Reexecução é recusada
+sem atualizar dados ou sobrescrever artefatos.
+
+### Verificação posterior e futuro F5
+
+Depois de uma execução real autorizada, conferir saída e etapas, revalidar marcador e identidade
+e realizar inspeção independente autorizada do esquema, histórico de migrations, integridade,
+FKs e conteúdo demonstrativo. A existência isolada de `.ready` não comprova essas condições.
+Não usar migration como ferramenta de inspeção ou correção automática.
+
+Preparar o banco não inicia o MVC. Para futuro F5, ainda será necessário aprovar o resultado
+operacional, selecionar o projeto web e o perfil `NextGameAI - Visual Seguro`, confirmar conexão
+ReadWrite, ausência de migrations automáticas, barreira HTTP, faixa sintética e ausência de capas
+externas. A barreira não cobre tráfego do navegador nem clientes manuais. Development normal
+continua com seu comportamento anterior; não utilizá-lo para validar o ambiente visual.
+
+### Cobertura operacional
+
+Os testes da entrada usam o mesmo despachante de Main com fábrica interna apontando somente
+para a raiz temporária sintética. Argumentos/ambientes recusados não chegam a resolver essa raiz.
+Nenhum teste chama Main ou RunAsync contra o destino definitivo; não há mudança global de ambiente.
+
+Há cobertura de leitura sem escrita, conflitos com bytes inválidos para SQLite, armazenamento
+remoto/indeterminado simulado, metadados indisponíveis, reparse points, hard links e espaço não
+consultável. Os pontos internos de falha do marcador não são configuráveis pela linha de comando.
+Exercitam criação, escrita parcial, flush, movimento, conflito tardio, validação real posterior,
+propriedade do marcador, cancelamento na fronteira e falha da mensagem final. Falhas antes das
+operações são injetadas em fronteiras específicas; não equivalem a simular queda de energia.
+Todos esses cenários usam diretórios temporários próprios; a execução real permanece pendente.
+
+Validação desta implementação: build sem erros ou avisos; 43 casos novos aprovados,
+80 testes completos do preparador, 51 do ambiente visual, 749 Host=None e 89 Host=Mvc.
+Total único: 838 aprovados, zero falhas e ignorados. Os subconjuntos não devem ser somados
+novamente ao total das categorias. O resultado histórico anterior permanece em 795.
+A aprovação de testes temporários não valida a execução no destino definitivo.
