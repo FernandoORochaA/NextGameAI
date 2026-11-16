@@ -11,6 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 var visual = builder.Environment.IsEnvironment(VisualEnvironment.Name);
 var visualDatabase = visual ? VisualEnvironment.Configure(builder.Environment.EnvironmentName, builder.Configuration,
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)) : null;
+if (visual) builder.WebHost.UseStaticWebAssets();
 
 // Add services to the container.
 builder.Services.AddControllersWithViews(options =>
